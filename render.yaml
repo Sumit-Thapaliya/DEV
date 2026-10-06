@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: jobdev-api
+    runtime: node
+    plan: free
+    rootDir: apps/backend
+    buildCommand: npm install -g pnpm@9.15.0 && pnpm install && pnpm build
+    startCommand: pnpm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_SSL
+        value: "true"
+      - key: DB_SSL_REJECT_UNAUTHORIZED
+        value: "false"
+      - key: STATIC_OTP
+        value: "123456"
+      - key: DATABASE_URL
+        fromGroup: jobdev-secrets
+      - key: JWT_SECRET
+        fromGroup: jobdev-secrets
+
+  - type: web
+    name: jobdev-web
+    runtime: node
+    plan: free
+    rootDir: apps/frontend
+    buildCommand: npm install -g pnpm@9.15.0 && pnpm install && pnpm build
+    startCommand: pnpm start
+    autoDeploy: true
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://jobdev-api.onrender.com

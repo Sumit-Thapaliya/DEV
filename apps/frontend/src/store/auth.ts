@@ -23,30 +23,51 @@ interface AuthState {
 
 const SESSION_KEY = 'jobdev-session';
 
+/* Embedded previews often block third-party cookies; some sandboxed frames
+   also block one of the storages. Try sessionStorage first, then localStorage,
+   so a logged-in session survives reloads in as many environments as possible. */
 const readPersistedSession = (): { user: AuthUser; token: string } | null => {
-  try {
-    const raw = window.sessionStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { user?: AuthUser; token?: string };
-    if (parsed.user && parsed.token) {
-      return { user: parsed.user, token: parsed.token };
+  const stores: Array<Storage | null> = [safeStorage('session'), safeStorage('local')];
+  for (const store of stores) {
+    if (!store) continue;
+    try {
+      const raw = store.getItem(SESSION_KEY);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as { user?: AuthUser; token?: string };
+      if (parsed.user && parsed.token) {
+        return { user: parsed.user, token: parsed.token };
+      }
+    } catch {
+      /* try the next store */
     }
-    return null;
-  } catch {
-    return null;
   }
+  return null;
 };
 
-const persistSession = (user: AuthUser | null, token: string | null) => {
+function safeStorage(kind: 'session' | 'local'): Storage | null {
   try {
-    if (user && token) {
-      window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user, token }));
-    } else {
-      window.sessionStorage.removeItem(SESSION_KEY);
-    }
+    const store = kind === 'session' ? window.sessionStorage : window.localStorage;
+    store.getItem('__jobdev_probe__');
+    return store;
   } catch {
-    // sessionStorage unavailable - in-memory session only.
+    return null;
   }
+}
+
+const persistSession = (user: AuthUser | null, token: string | null) => {
+  const payload = user && token ? JSON.stringify({ user, token }) : null;
+  for (const kind of ['session', 'local'] as const) {
+    const store = safeStorage(kind);
+    if (!store) continue;
+    try {
+      if (payload) store.setItem(SESSION_KEY, payload);
+      else store.removeItem(SESSION_KEY);
+      return;
+    } catch {
+      /* try the next store */
+    }
+  }
+  // No storage available - in-memory session only.
 };
 
 const persisted =

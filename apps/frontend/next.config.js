@@ -2,6 +2,8 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 module.exports = {
+  // Canvas saves include bounded ATS extraction before the database transaction.
+  experimental: { proxyTimeout: 90000 },
   allowedDevOrigins: ['*.e2b.app', '*.ritikthakur.com.np'],
   async headers() {
     return [

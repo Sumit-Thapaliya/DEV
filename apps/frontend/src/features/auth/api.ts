@@ -14,7 +14,7 @@ export interface AuthUser {
   contactNumber: string | null;
   avatar: string | null;
   resumeFileName: string | null;
-  parsedProfile: string | null;
+  parsedProfile: Record<string, unknown> | string | null;
   createdAt: string;
 }
 
@@ -37,6 +37,7 @@ export interface UpdateProfilePayload {
   aboutCompany?: string | null;
   contactNumber?: string;
   avatar?: string;
+  parsedProfile?: string | null;
 }
 
 const jsonInit = (body: unknown): RequestInit => ({
@@ -91,9 +92,13 @@ export async function uploadResumeRequest(
   dataBase64: string,
   parsed?: Record<string, unknown> | null,
 ) {
+  /* Extraction now happens server-side (the backend forwards the file to the
+     ATS service); only send `parsed` when a caller actually has one. */
+  const payload: Record<string, unknown> = { fileName, dataBase64 };
+  if (parsed) payload.parsed = parsed;
   return apiClient('/api/auth/resume', {
     method: 'POST',
-    ...jsonInit({ fileName, dataBase64, parsed }),
+    ...jsonInit(payload),
   });
 }
 

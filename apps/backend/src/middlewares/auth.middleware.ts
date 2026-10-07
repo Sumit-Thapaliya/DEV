@@ -37,20 +37,39 @@ export const authMiddleware: RequestHandler = async (req, _res, next) => {
     const bearerToken = authHeader?.startsWith('Bearer ')
       ? authHeader.slice(7)
       : null;
-    const token = bearerToken ?? parseCookies(req.headers.cookie)[COOKIE_NAME];
-    if (!token) {
+    const headerToken = typeof req.headers['x-auth-token'] === 'string'
+      ? req.headers['x-auth-token']
+      : null;
+    const queryToken = typeof req.query.auth_token === 'string'
+      ? req.query.auth_token
+      : null;
+    const cookieToken = parseCookies(req.headers.cookie)[COOKIE_NAME];
+
+    // Channels in priority order. The query/header-token fallbacks exist for
+    // embedded sandbox previews whose proxies may not forward cookies or the
+    // Authorization header; regular browsers and Render use bearer/cookie.
+    const channels: Array<{ name: string; token: string | null | undefined }> = [
+      { name: 'bearer', token: bearerToken },
+      { name: 'x-auth-token', token: headerToken },
+      { name: 'cookie', token: cookieToken },
+      { name: 'query', token: queryToken },
+    ];
+    const found = channels.find((channel) => !!channel.token);
+    if (!found) {
       console.log(
         `[AUTH-DEBUG] no credentials on ${req.method} ${req.originalUrl} (auth header: ${authHeader ? 'present' : 'none'}, cookie: ${req.headers.cookie ? 'present' : 'none'})`,
       );
       throw new AppError(401, 'Not authenticated');
     }
+    const token = found.token as string;
+    console.log(`[AUTH-DEBUG] ${req.method} ${req.path} authenticated via ${found.name}`);
 
     let payload: { sub: string };
     try {
       payload = jwt.verify(token, env.JWT_SECRET) as { sub: string };
     } catch (verifyError) {
       console.log(
-        `[AUTH-DEBUG] jwt verify failed (${bearerToken ? 'bearer' : 'cookie'}):`,
+        `[AUTH-DEBUG] jwt verify failed (${found.name}):`,
         verifyError instanceof Error ? verifyError.message : verifyError,
       );
       throw new AppError(401, 'Session expired. Please log in again.');

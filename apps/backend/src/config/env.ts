@@ -14,6 +14,9 @@ const schema = z.object({
   DB_SSL_REJECT_UNAUTHORIZED: booleanFromEnv.default('true'),
   JWT_SECRET: z.string().default('supersecretjwtkey'),
   STATIC_OTP: z.string().default(''),
+  ATS_ENDPOINT: z.string().default('https://ats-resume-api-cmkh.onrender.com'),
+  ATS_API_KEY: z.string().default(''),
+  ATS_MAX_PAGES: z.coerce.number().int().positive().default(2),
 }).refine(({ DB_POOL_MIN, DB_POOL_MAX }) => DB_POOL_MIN <= DB_POOL_MAX, {
   message: 'DB_POOL_MIN must not exceed DB_POOL_MAX',
   path: ['DB_POOL_MIN'],

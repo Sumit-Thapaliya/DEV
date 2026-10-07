@@ -64,8 +64,14 @@ export class User {
   @Column({ type: 'timestamp with time zone', nullable: true })
   resumeUploadedAt!: Date | null;
 
-  @Column({ type: 'text', nullable: true })
-  parsedProfile!: string | null;
+  @Column({ type: 'jsonb', nullable: true })
+  resumeCanvas!: Record<string, any> | null;
+
+  @Column({ type: 'bytea', nullable: true })
+  resumePdf!: Buffer | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  parsedProfile!: Record<string, unknown> | null;
 
   @Column({ type: 'boolean', default: false })
   isDeleted!: boolean;

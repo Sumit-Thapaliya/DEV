@@ -1,3 +1,4 @@
+import { recruiterResume } from '../resume/resume.controller.js';
 import { Router } from 'express';
 import { authMiddleware, requireRoles } from '../../middlewares/auth.middleware.js';
 import { UserRole } from '../user/user.entity.js';
@@ -15,6 +16,7 @@ candidateRoutes.use(
 );
 
 candidateRoutes.get('/', listCandidates);
+candidateRoutes.get('/:id/resume', recruiterResume);
 candidateRoutes.get('/:id', getCandidate);
 candidateRoutes.delete(
   '/:id',

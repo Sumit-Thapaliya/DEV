@@ -32,6 +32,7 @@
 
 import {
   resumePdf,
+  type CanvasDocument,
   type ResumeAlign,
   type ResumeBlock,
   type ResumeBlockKind,
@@ -267,6 +268,11 @@ export interface AtsGenerationResult {
   parseUrl?: string;
   /** Present for demo results only — drives the in-page preview. */
   document?: ResumeDocument;
+  /**
+   * The free-placed page the canvas editor works on. Absent until something is
+   * edited: a parse result converts to it with `flowToCanvas()`.
+   */
+  canvas?: CanvasDocument;
 }
 
 export interface GenerateAtsResumeInput {

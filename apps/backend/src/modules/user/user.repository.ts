@@ -1,4 +1,5 @@
 import { AppDataSource } from '../../database/data-source.js';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { User, UserRole } from './user.entity.js';
 import type { CreateUserInput, UpdateUserInput } from './user.types.js';
 
@@ -40,7 +41,12 @@ export class UserRepository {
   }
 
   async update(userId: string, data: UpdateUserInput) {
-    await this.repository.update(userId, data);
+    /* jsonb columns need one cast: TypeORM's deep-partial mapper does not
+       model open record types. */
+    await this.repository.update(
+      userId,
+      data as unknown as QueryDeepPartialEntity<User>,
+    );
     return this.repository.findOneByOrFail({ userId });
   }
 }

@@ -1,4 +1,5 @@
 'use client';
+import { parseStoredProfile, profileChecklist } from './candidate/profile-data';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -10,6 +11,7 @@ import {
   Download,
   Eye,
   FileCheck2,
+  Search,
   Sparkles,
   UploadCloud,
   X,
@@ -20,6 +22,7 @@ import { apiGet, apiPost, type JobRow } from '@/features/dashboard/shared';
 import { CandidateProfileGate } from '@/features/dashboard/candidate-profile-gate';
 import { useCountUp } from '@/lib/use-count-up';
 import { cn } from '@/lib/utils';
+import { logSearchKeywordRequest, updateProfileRequest } from '@/features/auth/api';
 import { useAuthStore } from '@/store/auth';
 
 import {
@@ -36,8 +39,6 @@ import {
   type JobPosting,
   PIPELINE_ORDER,
   profileCompleteness,
-  PROFILE_CHECKLIST,
-  type ChecklistItem,
   type Notification,
 } from './candidate/mock-data';
 import { Sidebar as CandidateSidebar, type CandidateView } from './candidate/sidebar';
@@ -64,14 +65,9 @@ import {
   StatusChip,
 } from './candidate/views';
 
-function parseStoredProfile(raw: string | null | undefined): Partial<CandidateProfile> {
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw) as Partial<CandidateProfile>;
-  } catch {
-    return {};
-  }
-}
+/* Accepts either our own Save format (CandidateProfile-shaped) or the raw JSON
+   the ATS extraction service returns (an envelope around JSON-Resume data),
+   and normalizes both into profile fields. */
 
 const LIVE_STATUS: Record<string, ApplicationStatus> = {
   NEW: 'Applied',
@@ -245,6 +241,7 @@ function countByStatus(applications: Application[]): Record<ApplicationStatus, n
 
 export function CandidateDashboard() {
   const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
   const logout = useAuthStore((state) => state.logout);
 
   const [view, setView] = useState<CandidateView>('overview');
@@ -252,9 +249,6 @@ export function CandidateDashboard() {
   const [applications, setApplications] = useState<Application[]>(INITIAL_APPLICATIONS);
   const [savedIds, setSavedIds] = useState<string[]>(INITIAL_SAVED_IDS);
 
-  const [checklist, setChecklist] = useState<ChecklistItem[]>(() =>
-    PROFILE_CHECKLIST.map((item) => ({ ...item, done: false })),
-  );
   const [toast, setToast] = useState<string | null>(null);
 
   /* Profile mirrors the real account, enriched by the ATS-parsed resume when
@@ -285,28 +279,7 @@ export function CandidateDashboard() {
     });
   }, [user]);
 
-  /* Data-driven checklist signals track the real profile; references/video
-     stay manual because only the candidate knows about them. */
-  useEffect(() => {
-    setChecklist((current) =>
-      current.map((item) => {
-        switch (item.key) {
-          case 'links':
-            return { ...item, done: profile.links.length > 0 };
-          case 'education':
-            return { ...item, done: profile.education.length > 0 };
-          case 'salary':
-            return { ...item, done: Boolean(profile.expectedSalary) };
-          case 'phone':
-            return { ...item, done: Boolean(profile.phone) };
-          case 'workModes':
-            return { ...item, done: profile.workModes.length > 0 };
-          default:
-            return item;
-        }
-      }),
-    );
-  }, [profile]);
+  const checklist = useMemo(() => profileChecklist(profile), [profile]);
 
   /* Live data: jobs and applications come from the API, not mock data. */
   const loadLiveData = useCallback(async () => {
@@ -332,6 +305,16 @@ export function CandidateDashboard() {
   useEffect(() => {
     void loadLiveData();
   }, [loadLiveData]);
+
+  /* Build-resume Save: update session state AND persist the edited profile so
+     it survives reloads (stored as parsedProfile on the account). */
+  async function persistProfile(next: CandidateProfile) {
+    const serialized = JSON.stringify(next);
+    await updateProfileRequest({ parsedProfile: serialized });
+    setProfile(next);
+    const currentUser = useAuthStore.getState().user;
+    if (currentUser) setUser({ ...currentUser, parsedProfile: serialized });
+  }
 
   /* ATS resume: the uploaded file and the generated download live here so they
      survive switching views (the studio itself is unmounted on navigation). */
@@ -366,7 +349,61 @@ export function CandidateDashboard() {
   const [selectedJob, setSelectedJob] = useState<JobPosting | null>(null);
 
   const [keywordFilters, setKeywordFilters] = useState<string[]>([]);
-  
+  /* `searchDraft` is what the user types; `jobSearch` is the applied query,
+     committed only when the Search button is clicked or Enter is pressed. */
+  const [searchDraft, setSearchDraft] = useState('');
+  const [jobSearch, setJobSearch] = useState('');
+
+  const keywordOptions = useMemo(() => {
+    const DEFAULT_KEYWORDS = [
+      'Remote',
+      'Hybrid',
+      'On-site',
+      'Full-time',
+      'Part-time',
+      'Internship',
+      'Frontend',
+      'Backend',
+      'Full-stack',
+      'React',
+      'Node.js',
+      'TypeScript',
+      'Engineer',
+      'Designer',
+    ];
+    const derived = new Map<string, number>();
+    for (const job of jobs) {
+      const candidates = [
+        job.company,
+        job.location,
+        job.type,
+        job.workMode,
+        ...job.title.split(/\s+/),
+      ];
+      for (const raw of candidates) {
+        const clean = raw.trim();
+        if (clean.length < 3) continue;
+        derived.set(clean, (derived.get(clean) ?? 0) + 1);
+      }
+    }
+    const derivedSorted = [...derived.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([token]) => token);
+    return [...new Set([...derivedSorted, ...DEFAULT_KEYWORDS])].slice(0, 14);
+  }, [jobs]);
+
+  const filteredJobs = useMemo(() => {
+    const text = jobSearch.trim().toLowerCase();
+    return jobs.filter((job) => {
+      const haystack =
+        `${job.title} ${job.company} ${job.location} ${job.type} ${job.workMode} ${job.description}`.toLowerCase();
+      const keywordMatch = keywordFilters.every((keyword) =>
+        haystack.includes(keyword.toLowerCase()),
+      );
+      const textMatch = !text || haystack.includes(text);
+      return keywordMatch && textMatch;
+    });
+  }, [jobs, keywordFilters, jobSearch]);
 
   /* Keyword boxes: curated job-market keywords plus anything derived from the
      live job list; picking one adds it to the search box and filters the grid. */
@@ -510,10 +547,9 @@ export function CandidateDashboard() {
   }
 
 
-  function toggleChecklistItem(key: string) {
-    setChecklist((current) =>
-      current.map((item) => (item.key === key ? { ...item, done: !item.done } : item)),
-    );
+  function toggleChecklistItem() {
+    // Completion is computed from saved fields, never manually checked off.
+    setView('profile');
   }
 
   function downloadAtsResume() {
@@ -702,15 +738,18 @@ export function CandidateDashboard() {
                     <FileCheck2 className="h-5 w-5" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold">No ATS resume generated yet</p>
+                    <p className="text-sm font-semibold">
+                      {user?.resumeFileName ? 'Your saved resume is ready to open' : 'No ATS resume generated yet'}
+                    </p>
                     <p className="text-sm text-muted-foreground">
-                      Upload a PDF, DOCX or DOC and download a single-column, parser-safe
-                      version.
+                      {user?.resumeFileName
+                        ? 'Build resume will use your existing upload — no need to upload it again.'
+                        : 'Upload a PDF, DOCX or DOC and download a single-column, parser-safe version.'}
                     </p>
                   </div>
                   <Button onClick={() => setView('resume')}>
                     <UploadCloud className="h-4 w-4" />
-                    Upload resume
+                    {user?.resumeFileName ? 'Open saved resume' : 'Upload resume'}
                   </Button>
                 </div>
               )}
@@ -834,13 +873,70 @@ export function CandidateDashboard() {
             result={atsResult}
             onResultChange={setAtsResult}
             onNotify={setToast}
+            onSave={persistProfile}
           />
         )}
 
         {view === 'jobs' && (
           <div className="space-y-4">
+            <div className="rounded-xl border border-border bg-card p-3">
+              <form
+                className="flex flex-wrap items-center gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const applied = searchDraft.trim();
+                  setJobSearch(applied);
+                  if (applied) logSearchKeywordRequest(applied).catch(() => {});
+                }}
+              >
+                <div className="flex min-w-[200px] flex-1 flex-wrap items-center gap-2 rounded-lg border border-input bg-background px-2 py-1.5">
+                  {keywordFilters.map((keyword) => (
+                    <button
+                      key={keyword}
+                      type="button"
+                      onClick={() =>
+                        setKeywordFilters((current) =>
+                          current.filter((item) => item !== keyword),
+                        )
+                      }
+                      className="flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold text-primary-foreground transition-transform active:scale-95"
+                    >
+                      {keyword}
+                      <X className="h-3 w-3" />
+                    </button>
+                  ))}
+                  <input
+                    value={searchDraft}
+                    onChange={(event) => setSearchDraft(event.target.value)}
+                    placeholder="Search jobs by keyword…"
+                    className="h-7 min-w-[140px] flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+                <Button type="submit" className="gap-1.5">
+                  <Search className="h-4 w-4" />
+                  Search
+                </Button>
+              </form>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {keywordOptions
+                  .filter((keyword) => !keywordFilters.includes(keyword))
+                  .map((keyword) => (
+                    <button
+                      key={keyword}
+                      type="button"
+                      onClick={() => {
+                        setKeywordFilters((current) => [...current, keyword]);
+                        logSearchKeywordRequest(keyword).catch(() => {});
+                      }}
+                      className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary-dark"
+                    >
+                      + {keyword}
+                    </button>
+                  ))}
+              </div>
+            </div>
             <JobsView
-              jobs={jobs}
+              jobs={filteredJobs}
               savedIds={savedIds}
               appliedJobIds={appliedJobIds}
               onOpenJob={setSelectedJob}
@@ -863,29 +959,17 @@ export function CandidateDashboard() {
             atsFileName={atsResult?.fileName ?? null}
             onOpenResume={() => setView('resume')}
             onDownloadAts={downloadAtsResume}
-            onSaveProfile={(fields) => setProfile((current) => ({ ...current, ...fields }))}
-            onAddSkill={(skill) =>
-              setProfile((current) =>
-                current.skills.includes(skill)
-                  ? current
-                  : { ...current, skills: [...current.skills, skill] },
-              )
-            }
-            onRemoveSkill={(skill) =>
-              setProfile((current) => ({
-                ...current,
-                skills: current.skills.filter((item) => item !== skill),
-              }))
-            }
-            onAddExperience={(entry) =>
-              setProfile((current) => ({
-                ...current,
-                experience: [
-                  ...current.experience,
-                  { ...entry, highlights: [] },
-                ],
-              }))
-            }
+            onSaveProfile={(fields) => persistProfile({ ...profile, ...fields })}
+            onAddSkill={(skill) => {
+              if (!profile.skills.some(value => value.toLowerCase() === skill.toLowerCase()))
+                void persistProfile({ ...profile, skills: [...profile.skills, skill] }).catch(error => setToast(error.message));
+            }}
+            onRemoveSkill={(skill) => {
+              void persistProfile({ ...profile, skills: profile.skills.filter(value => value !== skill) }).catch(error => setToast(error.message));
+            }}
+            onAddExperience={(entry) => {
+              void persistProfile({ ...profile, experience: [...profile.experience, { ...entry, highlights: [] }] }).catch(error => setToast(error.message));
+            }}
           />
         )}
 

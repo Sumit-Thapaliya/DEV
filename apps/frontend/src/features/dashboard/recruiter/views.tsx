@@ -29,6 +29,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { apiClient } from '@/lib/api-client';
+import { readApiError } from '@/features/auth/api';
 import { useAuthStore } from '@/store/auth';
 
 import { RecruiterProfileForm } from '../recruiter-profile-form';
@@ -116,10 +118,8 @@ function MatchBar({ value }: { value: number }) {
   );
 }
 
-/* --- Applicant detail drawer ---------------------------------------------
- * Right now the details come from mock data. When the candidate module ships,
- * this drawer will hydrate from GET /api/applicants/:id (real resume,
- * profile, uploaded documents). */
+/* Applicant details come from the API. Resume previews are fetched with the
+ * authenticated session; only the server-watermarked PDF is exposed here. */
 
 interface DrawerProps {
   applicant: Applicant | null;
@@ -135,18 +135,61 @@ export function ApplicantDrawer({
   onScheduleInterview,
 }: DrawerProps) {
   const [scheduling, setScheduling] = useState(false);
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [resumeUrl, setResumeUrl] = useState<string | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  useEffect(() => { setResumeOpen(false); }, [applicant?.id]);
+  useEffect(() => {
+    setResumeUrl(null);
+    setResumeError(null);
+    if (!resumeOpen || !applicant?.resumeUrl) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    async function load() {
+      try {
+        const response = await apiClient(applicant!.resumeUrl!, { signal: controller.signal });
+        if (!response.ok) throw new Error(await readApiError(response));
+        const blob = await response.blob();
+        if (cancelled) return;
+        if (!blob.type.includes('pdf')) throw new Error('The resume preview is not a PDF.');
+        objectUrl = URL.createObjectURL(blob);
+        setResumeUrl(objectUrl);
+      } catch (problem) {
+        if (!cancelled) setResumeError(problem instanceof Error ? problem.message : 'Could not load the resume.');
+      }
+    }
+    void load();
+    return () => { cancelled = true; controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [resumeOpen, applicant?.resumeUrl]);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') { if (resumeOpen) setResumeOpen(false); else onClose(); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, resumeOpen]);
 
   if (!applicant) return null;
 
   return (
     <div className="fixed inset-0 z-[60]">
+      {resumeOpen && (
+        <div role="dialog" aria-modal="true" aria-label="Candidate resume" className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground/50 p-3 sm:p-6">
+          <section className="flex h-[90vh] w-full max-w-5xl flex-col rounded-xl border border-border bg-card p-4 shadow-xl">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="font-semibold">{applicant.name} — JobDev resume</h3>
+              <div className="flex items-center gap-3">
+                {resumeUrl && <a href={resumeUrl} download="JobDev-candidate-resume.pdf" className="text-sm font-semibold text-primary">Download PDF</a>}
+                <Button variant="ghost" size="sm" onClick={() => setResumeOpen(false)} aria-label="Close resume"><X className="h-4 w-4" /></Button>
+              </div>
+            </div>
+            {resumeError ? <p role="alert" className="text-sm text-destructive">{resumeError}</p>
+              : resumeUrl ? <iframe title="JobDev-watermarked candidate resume" src={resumeUrl} className="min-h-0 w-full flex-1 rounded-lg border border-border bg-white" />
+              : <p role="status" className="text-sm text-muted-foreground">Preparing the watermarked resume…</p>}
+          </section>
+        </div>
+      )}
       <div
         className="animate-fade-in absolute inset-0 bg-foreground/40 backdrop-blur-sm"
         onClick={onClose}
@@ -250,26 +293,13 @@ export function ApplicantDrawer({
             <p className="text-sm text-muted-foreground">{applicant.education}</p>
           </section>
 
-          {/* Resume / CV placeholder - real files arrive with the candidate module. */}
           <section>
             <h4 className="mb-1.5 font-semibold">Resume / CV</h4>
-            <button
-              type="button"
-              title="Resume viewer lands with the candidate module"
-              className="flex w-full items-center gap-3 rounded-xl border border-dashed border-border bg-muted/50 p-3 text-left transition-colors hover:border-primary/40"
-            >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary-dark">
-                <FileText className="h-5 w-5" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  View resume (PDF)
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  Placeholder - real resumes arrive with the candidate module.
-                </span>
-              </span>
-            </button>
+            <Button variant="outline" className="w-full" disabled={!applicant.resumeUrl} onClick={() => setResumeOpen(true)}>
+              <FileText className="h-4 w-4" />
+              {applicant.resumeUrl ? 'View resume (PDF)' : 'No resume uploaded'}
+            </Button>
+            {applicant.resumeUrl && <p className="mt-2 text-xs text-muted-foreground">Latest saved resume · branded with JobDev.</p>}
           </section>
         </div>
 

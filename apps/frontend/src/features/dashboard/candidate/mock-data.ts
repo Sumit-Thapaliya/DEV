@@ -144,14 +144,14 @@ export const PROFILE_CHECKLIST: ChecklistItem[] = [
     label: 'Resume attached',
     weight: 20,
     done: false,
-    hint: 'Applications without a resume get skipped.',
+    hint: 'Attach the resume you want recruiters to see.',
   },
   {
     key: 'links',
     label: 'Portfolio or GitHub',
     weight: 10,
     done: false,
-    hint: 'Portfolio links roughly double profile views.',
+    hint: 'Add links to your work so recruiters can review it.',
   },
   {
     key: 'education',
@@ -181,20 +181,7 @@ export const PROFILE_CHECKLIST: ChecklistItem[] = [
     done: false,
     hint: 'Pick remote, hybrid or on-site preferences.',
   },
-  {
-    key: 'references',
-    label: 'Two professional references',
-    weight: 10,
-    done: false,
-    hint: 'Speeds up background checks when an offer lands.',
-  },
-  {
-    key: 'video',
-    label: '60-second intro video',
-    weight: 5,
-    done: false,
-    hint: 'Profiles with a video get 3x more recruiter replies.',
-  },
+
 ];
 
 export const profileCompleteness = (items: ChecklistItem[]) => {

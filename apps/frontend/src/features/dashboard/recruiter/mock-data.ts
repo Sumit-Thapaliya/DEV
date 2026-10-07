@@ -42,6 +42,8 @@ export const STATUS_MEANINGS: Record<ApplicantStatus, string> = {
 
 export interface Applicant {
   id: string;
+  candidateId?: string;
+  resumeUrl?: string;
   name: string;
   job: string;
   match: number;

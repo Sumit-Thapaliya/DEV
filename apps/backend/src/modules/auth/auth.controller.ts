@@ -1,8 +1,10 @@
+import { hydratedCanvas } from '../resume/resume.controller.js';
 import { SearchHistory } from '../user/search-history.entity.js';
 import { AppDataSource } from '../../database/data-source.js';
 import { User } from '../user/user.entity.js';
 import type { RequestHandler } from 'express';
 import { AppError } from '../../common/errors/AppError.js';
+import { env } from '../../config/env.js';
 import {
   AuthService,
   COOKIE_NAME,
@@ -75,8 +77,11 @@ export const formatResumeProxy: RequestHandler = async (req, res, next) => {
     formData.append('max_pages', '2');
     
     // Proxy to Python API
-    const ATS_ENDPOINT = process.env.ATS_ENDPOINT || 'https://ats-resume-api-cmkh.onrender.com/v1/format';
-    const ATS_API_KEY = process.env.ATS_API_KEY || 'demo-key';
+    const ATS_ENDPOINT = `${env.ATS_ENDPOINT}/v1/format`;
+    if (!env.ATS_API_KEY) {
+      throw new AppError(503, 'Extraction service is not configured on the server');
+    }
+    const ATS_API_KEY = env.ATS_API_KEY;
     
     const pyRes = await fetch(ATS_ENDPOINT, {
       method: 'POST',
@@ -90,18 +95,11 @@ export const formatResumeProxy: RequestHandler = async (req, res, next) => {
     
     const parsedJson = await pyRes.json();
     
-    // Save to ResumeVersions as v1
-    const repo = AppDataSource.getRepository(ResumeVersion);
-    const existingVersions = await repo.count({ where: { userId: req.user!.userId } });
-    
-    const version = repo.create({
-      userId: req.user!.userId,
-      version: existingVersions + 1,
-      profileData: parsedJson
+    await AppDataSource.transaction(async manager => {
+      await manager.delete(ResumeVersion, { userId: req.user!.userId });
+      await manager.getRepository(User).update(req.user!.userId, { parsedProfile: parsedJson });
     });
-    await repo.save(version);
-    
-    res.json({ success: true, data: { parsedJson, version: version.version } });
+    res.json({ success: true, data: { parsedJson } });
   } catch (error) {
     next(error);
   }
@@ -114,21 +112,43 @@ export const saveResumeDraft: RequestHandler = async (req, res, next) => {
     }
     const { parsedJson } = req.body;
     
-    const repo = AppDataSource.getRepository(ResumeVersion);
-    const existingVersions = await repo.count({ where: { userId: req.user!.userId } });
-    
-    const version = repo.create({
-      userId: req.user!.userId,
-      version: existingVersions + 1,
-      profileData: parsedJson
+    if (!parsedJson || typeof parsedJson !== 'object' || Array.isArray(parsedJson) || parsedJson.pages) {
+      throw new AppError(400, 'Canvas saves must use /api/auth/resume/current with the edited PDF.');
+    }
+    await AppDataSource.transaction(async manager => {
+      await manager.delete(ResumeVersion, { userId: req.user!.userId });
+      await manager.getRepository(User).update(req.user!.userId, { parsedProfile: parsedJson });
     });
-    await repo.save(version);
-    
-    // Update the main user parsedProfile so jobs can match
-    const userRepo = AppDataSource.getRepository(User);
-    await userRepo.update({ userId: req.user!.userId }, { parsedProfile: JSON.stringify(parsedJson) });
-    
-    res.json({ success: true, data: { version: version.version } });
+    res.json({ success: true, data: { saved: true } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Return only the authenticated candidate's own saved upload. */
+export const getSavedResume: RequestHandler = async (req, res, next) => {
+  try {
+    const user = req.user!;
+    if (user.role.toLowerCase() !== 'candidate') {
+      throw new AppError(403, 'Only candidates can retrieve their resume');
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (!user.resumeFileName || (!user.resumeData && !user.resumePdf)) {
+      res.json({ success: true, data: { resume: null } });
+      return;
+    }
+    res.json({
+      success: true,
+      data: {
+        resume: {
+          fileName: user.resumeFileName,
+          dataBase64: user.resumePdf?.toString('base64') ?? user.resumeData,
+          canvas: await hydratedCanvas(user),
+          uploadedAt: user.resumeUploadedAt,
+          parsedProfile: user.parsedProfile,
+        },
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -140,13 +160,44 @@ export const uploadResume: RequestHandler = async (req, res, next) => {
       throw new AppError(403, 'Only candidates can upload a resume');
     }
     const { fileName, dataBase64, parsed } = req.body;
+
+    /* Server-side extraction: send the file to the ATS resume service and
+       store whatever it parses. The API key never leaves the backend. */
+    let parsedProfile: Record<string, unknown> | null = parsed ?? null;
+    let atsError: string | null = null;
+    if (!parsedProfile && env.ATS_API_KEY.length > 0) {
+      try {
+        const buffer = Buffer.from(String(dataBase64), 'base64');
+        const form = new FormData();
+        form.append('file', new Blob([buffer], { type: 'application/pdf' }), fileName);
+        form.append('max_pages', String(env.ATS_MAX_PAGES));
+        const atsRes = await fetch(`${env.ATS_ENDPOINT}/v1/format`, {
+          method: 'POST',
+          headers: { 'X-API-Key': env.ATS_API_KEY },
+          body: form,
+        });
+        if (!atsRes.ok) {
+          atsError = `Extraction service replied ${atsRes.status}`;
+        } else {
+          parsedProfile = (await atsRes.json()) as Record<string, unknown>;
+        }
+      } catch {
+        atsError = 'Extraction service is unreachable right now';
+      }
+    } else if (!parsedProfile) {
+      atsError = 'Extraction service is not configured on the server';
+    }
+
     const user = await authService.uploadResume(
       req.user!.userId,
       fileName,
       dataBase64,
-      parsed ?? null,
+      parsedProfile,
     );
-    res.json({ success: true, data: { user: toSafeUser(user) } });
+    res.json({
+      success: true,
+      data: { user: toSafeUser(user), parsed: parsedProfile, atsError },
+    });
   } catch (error) {
     next(error);
   }

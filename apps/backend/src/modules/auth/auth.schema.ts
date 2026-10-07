@@ -35,6 +35,13 @@ export const updateProfileSchema = z
       .regex(/^[+]?[0-9\s()-]{7,15}$/, 'Enter a valid contact number')
       .optional(),
     avatar: z.string().max(400_000, 'Profile image is too large').optional(),
+    parsedProfile: z
+      .union([
+        z.string().max(500_000, 'Saved resume data is too large'),
+        z.record(z.string(), z.unknown()),
+      ])
+      .optional()
+      .nullable(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: 'Nothing to update',
@@ -55,7 +62,7 @@ export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 export const uploadResumeSchema = z.object({
   fileName: z.string().min(1).max(255),
   dataBase64: z.string().min(1).max(2_800_000, 'Resume file is too large (max 2 MB)'),
-  parsed: z.record(z.string(), z.unknown()).nullable().optional(),
+  parsed: z.record(z.string(), z.unknown()).optional().nullable(),
 });
 
 export type UploadResumeInput = z.infer<typeof uploadResumeSchema>;

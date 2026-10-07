@@ -1,3 +1,5 @@
+import { AppDataSource } from '../../database/data-source.js';
+import { ResumeVersion } from '../user/resume-version.entity.js';
 import * as bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { AppError } from '../../common/errors/AppError.js';
@@ -10,6 +12,7 @@ import type {
   UpdateProfileInput,
   VerifyOtpInput,
 } from './auth.schema.js';
+import type { UpdateUserInput } from '../user/user.types.js';
 
 export const COOKIE_NAME = 'jobdev_token';
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -158,7 +161,22 @@ export class AuthService {
     if (!user || user.isDeleted) {
       throw new AppError(404, 'User not found');
     }
-    return this.userRepo.update(userId, { ...input });
+    const { parsedProfile, ...rest } = input;
+    const fields: UpdateUserInput = { ...rest };
+    /* Clients send parsedProfile as serialized JSON text; the column is jsonb
+       so store the parsed object instead. */
+    if (typeof parsedProfile === 'string') {
+      try {
+        fields.parsedProfile = JSON.parse(parsedProfile) as Record<string, unknown>;
+      } catch {
+        fields.parsedProfile = { text: parsedProfile };
+      }
+    } else if (parsedProfile) {
+      fields.parsedProfile = parsedProfile;
+    } else if (parsedProfile === null) {
+      fields.parsedProfile = null;
+    }
+    return this.userRepo.update(userId, { ...fields });
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
@@ -185,11 +203,55 @@ export class AuthService {
     if (!user || user.isDeleted) {
       throw new AppError(404, 'User not found');
     }
-    return this.userRepo.update(userId, {
-      resumeFileName: fileName,
-      resumeData: dataBase64,
-      resumeUploadedAt: new Date(),
-      parsedProfile: parsed ? JSON.stringify(parsed) : null,
+
+    /* Pull the identity fields out of the extracted resume so the account
+       profile (name, email, phone) mirrors the CV that was uploaded. */
+    const resume =
+      parsed?.raw_resume_data && typeof parsed.raw_resume_data === 'object'
+        ? (parsed.raw_resume_data as Record<string, unknown>)
+        : {};
+    const basics =
+      resume.basics && typeof resume.basics === 'object'
+        ? (resume.basics as Record<string, unknown>)
+        : {};
+    const text = (value: unknown) =>
+      typeof value === 'string' && value.trim() ? value.trim() : '';
+    const cvName = text(basics.name) || text(parsed?.candidate_name);
+    const rawEmail = text(basics.email).toLowerCase();
+    const rawPhone = text(basics.phone);
+
+    /* For now the CV only fills identity fields that are still empty, so an
+       account's existing login credentials keep working after an upload. */
+    let cvEmail = '';
+    if (!user.email && rawEmail && EMAIL_PATTERN.test(rawEmail)) {
+      const taken = await this.userRepo.findByEmail(rawEmail);
+      if (!taken) cvEmail = rawEmail;
+    }
+    let cvPhone = '';
+    if (!user.mobile && rawPhone) {
+      const taken = await this.userRepo.findByMobile(rawPhone);
+      if (!taken) cvPhone = rawPhone;
+    }
+
+    return AppDataSource.transaction(async manager => {
+      const current = await manager.getRepository(User).findOne({ where: { userId }, lock: { mode: 'pessimistic_write' } });
+      if (!current) throw new AppError(404, 'User not found');
+      await manager.delete(ResumeVersion, { userId });
+      await manager.query('DELETE FROM resume_assets WHERE "userId" = $1', [userId]);
+      Object.assign(current, {
+        resumeCanvas: null,
+        resumePdf: null,
+        resumeFileName: fileName,
+        resumeData: dataBase64,
+        resumeUploadedAt: new Date(),
+        parsedProfile: parsed ?? null,
+        /* Auto-fill the profile straight from the CV: name, email and phone
+           number come from the extracted basics when present and still free. */
+        ...(cvName ? { name: cvName } : {}),
+        ...(cvEmail ? { email: cvEmail } : {}),
+        ...(cvPhone ? { mobile: cvPhone } : {}),
+      });
+      return manager.getRepository(User).save(current);
     });
   }
 }

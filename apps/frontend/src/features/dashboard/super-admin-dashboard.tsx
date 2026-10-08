@@ -1,7 +1,8 @@
 'use client';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { useState } from 'react';
 import { ShieldPlus } from 'lucide-react';
+import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,8 +18,9 @@ export function SuperAdminDashboard({ user }: { user: AuthUser }) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const client = useQueryClient();
+  const createAdmin = useMutation({ mutationFn: (data: { email: string; password: string; name?: string }) => apiPost('/api/admin/admins', data), onSuccess: () => client.invalidateQueries({ queryKey: ['account', user.id] }) });
+  const creating = createAdmin.isPending;
 
   const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -35,9 +37,8 @@ export function SuperAdminDashboard({ user }: { user: AuthUser }) {
       return;
     }
 
-    setCreating(true);
     try {
-      await apiPost('/api/admin/admins', {
+      await createAdmin.mutateAsync({
         email: email.trim(),
         password,
         name: name.trim() || undefined,
@@ -47,17 +48,14 @@ export function SuperAdminDashboard({ user }: { user: AuthUser }) {
       setEmail('');
       setName('');
       setPassword('');
-      setRefreshKey((key) => key + 1);
     } catch (error) {
       toast({ title: (error as Error).message, variant: 'destructive' });
-    } finally {
-      setCreating(false);
     }
   };
 
   return (
     <div className="space-y-8">
-      <AdminDashboard key={refreshKey} user={user} />
+      <AdminDashboard user={user} />
 
       <Card>
         <CardHeader className="pb-3">

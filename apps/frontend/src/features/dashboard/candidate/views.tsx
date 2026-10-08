@@ -1,6 +1,6 @@
 'use client';
+import { useMutation } from '@tanstack/react-query';
 
-import { useEffect, useMemo, useState } from 'react';
 import {
   Award,
   BellRing,
@@ -36,20 +36,29 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
-import { changePasswordRequest, readApiError } from '@/features/auth/api';
+import { changePasswordRequest } from '@/features/auth/api';
+import { useSession } from '@/features/auth/queries';
 import { useCountUp } from '@/lib/use-count-up';
 import { cn } from '@/lib/utils';
-import { useAuthStore } from '@/store/auth';
 
 import {
-  ACTIVITY_STATUS,
+  ApplicationsTrend,
+  MatchDonut,
+  PipelineFunnel,
+  SkillDemandBars,
+  SourcesDonut,
+  WeeklyBars,
+} from './charts';
+import {
   ACTIVE_STATUSES,
   type Activity,
+  ACTIVITY_STATUS,
   type Application,
   APPLICATION_STATUS_MEANINGS,
   type ApplicationStatus,
@@ -63,14 +72,6 @@ import {
   SOURCES,
   type WorkMode,
 } from './mock-data';
-import {
-  ApplicationsTrend,
-  MatchDonut,
-  PipelineFunnel,
-  SkillDemandBars,
-  SourcesDonut,
-  WeeklyBars,
-} from './charts';
 import { HelpCard } from './sidebar';
 
 /* -------------------------------------------------------------------------- */
@@ -1160,7 +1161,7 @@ export function JobsView({
                     {job.location}
                   </span>
                   <span>{job.type}</span>
-                  <span>posted {job.postedDaysAgo}d ago</span>
+                  <span>posted {job.postedTimeText}</span>
                 </div>
 
                 <p className="mt-2 text-sm font-semibold">
@@ -1447,10 +1448,13 @@ export function JobDrawer({
             <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               About the role
             </p>
-            <p className="text-sm text-muted-foreground">{job.description}</p>
+            <p className="whitespace-pre-wrap text-sm text-muted-foreground">{job.description}</p>
           </section>
 
-          <section>
+          {job.minimumQualifications && <section><h4 className="mb-1.5 font-semibold">Minimum qualifications</h4><p className="whitespace-pre-wrap text-sm text-muted-foreground">{job.minimumQualifications}</p></section>}
+          {job.preferredQualifications && <section><h4 className="mb-1.5 font-semibold">Preferred qualifications</h4><p className="whitespace-pre-wrap text-sm text-muted-foreground">{job.preferredQualifications}</p></section>}
+
+          {job.requirements.length > 0 && <section>
             <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               Requirements
             </p>
@@ -1462,7 +1466,7 @@ export function JobDrawer({
                 </li>
               ))}
             </ul>
-          </section>
+          </section>}
 
           <section>
             <button
@@ -1809,7 +1813,6 @@ export function ProfileView({
   profile,
   checklist,
   percent,
-  onToggleChecklist,
   onOpenSettings,
   atsReady = false,
   atsFileName = null,
@@ -1823,7 +1826,6 @@ export function ProfileView({
   profile: CandidateProfile;
   checklist: ChecklistItem[];
   percent: number;
-  onToggleChecklist: (key: string) => void;
   onOpenSettings: () => void;
   /** True once an ATS-friendly resume has been generated and is downloadable. */
   atsReady?: boolean;
@@ -1857,7 +1859,6 @@ export function ProfileView({
     noticePeriod: profile.noticePeriod,
   });
 
-  const missing = checklist.filter((item) => !item.done);
   const radius = 30;
   const circumference = 2 * Math.PI * radius;
   const dash = (percent / 100) * circumference;
@@ -2298,7 +2299,7 @@ export function ProfileView({
 /* -------------------------------------------------------------------------- */
 
 export function SettingsView({ profile }: { profile?: CandidateProfile }) {
-  const user = useAuthStore((state) => state.user);
+  const { data: user } = useSession();
   const [prefs, setPrefs] = useState({
     alerts: true,
     weekly: true,
@@ -2309,25 +2310,19 @@ export function SettingsView({ profile }: { profile?: CandidateProfile }) {
   const [pwOpen, setPwOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [changingPw, setChangingPw] = useState(false);
+  const changePassword = useMutation({ mutationFn: ({ current, next }: { current: string; next: string }) => changePasswordRequest(current, next) });
+  const changingPw = changePassword.isPending;
 
   async function handleChangePassword(event: React.FormEvent) {
     event.preventDefault();
-    setChangingPw(true);
     try {
-      const res = await changePasswordRequest(currentPassword, newPassword);
-      if (!res.ok) {
-        toast({ title: await readApiError(res), variant: 'destructive' });
-        return;
-      }
+      await changePassword.mutateAsync({ current: currentPassword, next: newPassword });
       toast({ title: 'Password changed', variant: 'success' });
       setCurrentPassword('');
       setNewPassword('');
       setPwOpen(false);
     } catch {
       toast({ title: 'Network error. Please try again.', variant: 'destructive' });
-    } finally {
-      setChangingPw(false);
     }
   }
 
@@ -2631,4 +2626,4 @@ export function StagePills({
   );
 }
 
-export { WORK_MODE_ICON, matchTone, SectionCard, EmptyState, MatchBar };
+export { EmptyState,MatchBar,matchTone,SectionCard,WORK_MODE_ICON };

@@ -14,72 +14,29 @@ declare global {
   }
 }
 
-const COOKIE_NAME = 'jobdev_token';
-
-export const parseCookies = (header: string | undefined) => {
-  const cookies: Record<string, string> = {};
-  if (!header) return cookies;
-  for (const part of header.split(';')) {
-    const index = part.indexOf('=');
-    if (index === -1) continue;
-    const key = part.slice(0, index).trim();
-    const value = part.slice(index + 1).trim();
-    if (key) cookies[key] = decodeURIComponent(value);
-  }
-  return cookies;
-};
+import { COOKIE_NAME } from '../modules/auth/auth.service.js';
+import { parseCookies } from '../common/cookies.js';
+export { parseCookies } from '../common/cookies.js';
 
 const userRepo = new UserRepository();
 
 export const authMiddleware: RequestHandler = async (req, _res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    const bearerToken = authHeader?.startsWith('Bearer ')
-      ? authHeader.slice(7)
-      : null;
-    const headerToken = typeof req.headers['x-auth-token'] === 'string'
-      ? req.headers['x-auth-token']
-      : null;
-    const queryToken = typeof req.query.auth_token === 'string'
-      ? req.query.auth_token
-      : null;
-    const cookieToken = parseCookies(req.headers.cookie)[COOKIE_NAME];
-
-    // Channels in priority order. The query/header-token fallbacks exist for
-    // embedded sandbox previews whose proxies may not forward cookies or the
-    // Authorization header; regular browsers and Render use bearer/cookie.
-    const channels: Array<{ name: string; token: string | null | undefined }> = [
-      { name: 'bearer', token: bearerToken },
-      { name: 'x-auth-token', token: headerToken },
-      { name: 'cookie', token: cookieToken },
-      { name: 'query', token: queryToken },
-    ];
-    const found = channels.find((channel) => !!channel.token);
-    if (!found) {
-      console.log(
-        `[AUTH-DEBUG] no credentials on ${req.method} ${req.originalUrl} (auth header: ${authHeader ? 'present' : 'none'}, cookie: ${req.headers.cookie ? 'present' : 'none'})`,
-      );
-      throw new AppError(401, 'Not authenticated');
-    }
-    const token = found.token as string;
-    console.log(`[AUTH-DEBUG] ${req.method} ${req.path} authenticated via ${found.name}`);
-
-    let payload: { sub: string };
+    // No bearer, custom-header or URL token fallback, even for previews.
+    const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
+    if (!token) throw new AppError(401, 'Not authenticated');
+    let payload: jwt.JwtPayload;
     try {
-      payload = jwt.verify(token, env.JWT_SECRET) as { sub: string };
-    } catch (verifyError) {
-      console.log(
-        `[AUTH-DEBUG] jwt verify failed (${found.name}):`,
-        verifyError instanceof Error ? verifyError.message : verifyError,
-      );
+      const decoded = jwt.verify(token, env.JWT_SECRET, {
+        algorithms: ['HS256'], issuer: 'jobdev-cookie-v2', audience: 'jobdev-web',
+      });
+      if (typeof decoded === 'string' || !decoded.sub || !Number.isInteger(decoded.ver)) throw new Error('Invalid session');
+      payload = decoded;
+    } catch {
       throw new AppError(401, 'Session expired. Please log in again.');
     }
-
-    const user = await userRepo.findById(payload.sub);
-    if (!user || user.isDeleted) {
-      console.log(`[AUTH-DEBUG] no user for sub=${payload.sub}`);
-      throw new AppError(401, 'Not authenticated');
-    }
+    const user = await userRepo.findById(payload.sub!);
+    if (!user || user.isDeleted || user.sessionVersion !== payload.ver) throw new AppError(401, 'Session expired. Please log in again.');
 
     req.user = user;
     next();

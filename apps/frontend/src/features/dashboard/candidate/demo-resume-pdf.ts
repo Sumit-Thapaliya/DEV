@@ -380,7 +380,7 @@ export function resumePdf(document: ResumeDocument): { blob: Blob; pages: number
 
 /* ========================================================================== */
 /*  Canvas model — the free-placement page the Canva-style editor works on.   */
-/*  Reconstructed to match resume-editor.tsx / edit-draft.ts usage exactly.   */
+/*  Reconstructed to match resume-editor.tsx usage exactly.   */
 /* ========================================================================== */
 
 export type CanvasFont = 'helvetica' | 'times' | 'courier';

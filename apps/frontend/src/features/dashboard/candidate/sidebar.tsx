@@ -3,7 +3,6 @@
 import {
   Bookmark,
   Briefcase,
-  CalendarCheck,
   Compass,
   FileSearch,
   HelpCircle,

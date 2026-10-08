@@ -1,3 +1,4 @@
+import { serviceRequest } from '../../common/http.js';
 import type { RequestHandler } from 'express';
 import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
 import { z } from 'zod';
@@ -69,7 +70,7 @@ export const saveCurrentResume: RequestHandler = async (req, res, next) => {
       const form = new FormData();
       form.append('file', new Blob([pdf], { type: 'application/pdf' }), input.fileName);
       form.append('max_pages', String(Math.max(1, input.canvas.pages.length)));
-      const response = await fetch(`${env.ATS_ENDPOINT}/v1/format`, {
+      const response = await serviceRequest(`${env.ATS_ENDPOINT}/v1/format`, {
         method: 'POST', headers: { 'X-API-Key': env.ATS_API_KEY }, body: form, signal: AbortSignal.timeout(30000),
       });
       if (!response.ok) throw new Error('ATS extraction failed');
@@ -132,7 +133,7 @@ export const recruiterResume: RequestHandler = async (req, res, next) => {
       if (!env.ATS_API_KEY) throw new AppError(503, 'Word-to-PDF conversion is unavailable');
       const form = new FormData();
       form.append('file', new Blob([new Uint8Array(bytes)]), candidate.resumeFileName);
-      const response = await fetch(`${env.ATS_ENDPOINT}/v1/format/pdf`, {
+      const response = await serviceRequest(`${env.ATS_ENDPOINT}/v1/format/pdf`, {
         method: 'POST', headers: { 'X-API-Key': env.ATS_API_KEY }, body: form, signal: AbortSignal.timeout(30000),
       });
       if (!response.ok) throw new AppError(502, 'Could not prepare the resume preview');

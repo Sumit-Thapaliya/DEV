@@ -100,6 +100,8 @@ export const createJob: RequestHandler = async (req, res, next) => {
         department: stringField(body, 'department'),
         employmentType: stringField(body, 'employmentType'),
         salary: stringField(body, 'salary'),
+        minimumQualifications: stringField(body, 'minimumQualifications'),
+        preferredQualifications: stringField(body, 'preferredQualifications'),
       },
       postedBy: recruiter.userId,
     });

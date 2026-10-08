@@ -1,17 +1,18 @@
 'use client';
+import { useMutation } from '@tanstack/react-query';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Briefcase, ShieldCheck, Star, UserRound } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
-import { loginRequest, readApiError } from '@/features/auth/api';
+import { loginRequest } from '@/features/auth/api';
 import { OtpStep } from '@/features/auth/otp-step';
 import { PasswordInput } from '@/features/auth/password-input';
-import { useAuthStore } from '@/store/auth';
+import { useSetSession } from '@/features/auth/queries';
 
 const TEST_ACCOUNTS = [
   {
@@ -42,11 +43,15 @@ const TEST_ACCOUNTS = [
 
 export function LoginForm() {
   const router = useRouter();
-  const setSession = useAuthStore((state) => state.setSession);
+  const setSession = useSetSession();
   const [step, setStep] = useState<'credentials' | 'otp'>('credentials');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const mutation = useMutation({
+    mutationFn: (args: Parameters<typeof loginRequest>) =>
+      loginRequest(...args),
+  });
+  const submitting = mutation.isPending;
 
   const handleCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -59,24 +64,17 @@ export function LoginForm() {
       return;
     }
 
-    setSubmitting(true);
     try {
-      const res = await loginRequest(identifier.trim(), password);
-
-      if (!res.ok) {
-        toast({ title: await readApiError(res), variant: 'destructive' });
-        return;
-      }
+      await mutation.mutateAsync([identifier.trim(), password]);
 
       toast({
         title: 'Password verified. Enter the OTP sent to you.',
         variant: 'success',
       });
+      router.prefetch('/dashboard');
       setStep('otp');
-    } catch {
-      toast({ title: 'Network error. Please try again.', variant: 'destructive' });
-    } finally {
-      setSubmitting(false);
+    } catch (error) {
+      toast({ title: (error as Error).message, variant: 'destructive' });
     }
   };
 
@@ -94,8 +92,8 @@ export function LoginForm() {
         notice="Enter the OTP for"
         backLabel="Back to password"
         onBack={() => setStep('credentials')}
-        onVerified={(user, token) => {
-          setSession(user, token);
+        onVerified={(user) => {
+          setSession(user);
           toast({ title: 'Logged in successfully', variant: 'success' });
           router.push('/dashboard');
         }}
@@ -133,36 +131,38 @@ export function LoginForm() {
         </Button>
       </form>
 
-      <div className="space-y-2">
-        <p className="section-label text-center">Quick test accounts</p>
-        <div className="grid grid-cols-2 gap-2">
-          {TEST_ACCOUNTS.map(({ icon: Icon, role, email, password: pw }) => (
-            <button
-              key={email}
-              type="button"
-              suppressHydrationWarning
-              onClick={() => fillAccount(email, pw)}
-              className="group flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary hover:shadow-md"
-              title={`${email} / ${pw} (OTP is 123456)`}
-            >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary-light transition-transform duration-200 group-hover:scale-110">
-                <Icon className="h-3.5 w-3.5 text-primary" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-xs font-semibold text-foreground">
-                  {role}
+      {process.env.NODE_ENV !== 'production' && (
+        <div className="space-y-2">
+          <p className="section-label text-center">Quick test accounts</p>
+          <div className="grid grid-cols-2 gap-2">
+            {TEST_ACCOUNTS.map(({ icon: Icon, role, email, password: pw }) => (
+              <button
+                key={email}
+                type="button"
+                suppressHydrationWarning
+                onClick={() => fillAccount(email, pw)}
+                className="group flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary hover:shadow-md"
+                title={`${email} / ${pw} (OTP is 123456)`}
+              >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary-light transition-transform duration-200 group-hover:scale-110">
+                  <Icon className="h-3.5 w-3.5 text-primary" />
                 </span>
-                <span className="block truncate text-[10px] text-muted-foreground">
-                  {email}
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold text-foreground">
+                    {role}
+                  </span>
+                  <span className="block truncate text-[10px] text-muted-foreground">
+                    {email}
+                  </span>
                 </span>
-              </span>
-            </button>
-          ))}
+              </button>
+            ))}
+          </div>
+          <p className="text-center text-[11px] text-muted-foreground">
+            Click one to fill the form. OTP for testing: <strong>123456</strong>
+          </p>
         </div>
-        <p className="text-center text-[11px] text-muted-foreground">
-          Click one to fill the form. OTP for testing: <strong>123456</strong>
-        </p>
-      </div>
+      )}
     </div>
   );
 }

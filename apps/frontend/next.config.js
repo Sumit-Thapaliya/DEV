@@ -8,7 +8,9 @@ module.exports = {
   async headers() {
     return [
       {
-        source: '/:path*',
+        // Private API responses must never enter an HTTP cache. Let Next manage
+        // caching for fingerprinted JS/CSS instead of disabling it globally.
+        source: '/api/:path*',
         headers: [
           { key: 'Cache-Control', value: 'no-store, max-age=0' },
           { key: 'Pragma', value: 'no-cache' },

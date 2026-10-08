@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { AppDataSource } from '../../database/data-source.js';
 import { ResumeVersion } from '../user/resume-version.entity.js';
 import * as bcrypt from 'bcrypt';
@@ -30,7 +31,7 @@ export const normalizePhone = (identifier: string) =>
 const randomDigits = (length: number) => {
   let out = '';
   for (let i = 0; i < length; i += 1) {
-    out += Math.floor(Math.random() * 10).toString();
+    out += randomInt(0, 10).toString();
   }
   return out;
 };
@@ -52,7 +53,8 @@ export const toSafeUser = (user: User) => ({
 });
 
 export const signSession = (user: User) =>
-  jwt.sign({ sub: user.userId, role: user.role }, env.JWT_SECRET, {
+  jwt.sign({ sub: user.userId, ver: user.sessionVersion }, env.JWT_SECRET, {
+    algorithm: 'HS256', issuer: 'jobdev-cookie-v2', audience: 'jobdev-web',
     expiresIn: SESSION_TTL_SECONDS,
   });
 
@@ -61,7 +63,7 @@ export const cookieOptions = () => ({
   sameSite: 'lax' as const,
   secure: env.NODE_ENV === 'production',
   path: '/',
-  maxAge: SESSION_TTL_SECONDS,
+  maxAge: SESSION_TTL_SECONDS * 1000,
 });
 
 export class AuthService {
@@ -74,19 +76,21 @@ export class AuthService {
   }
 
   private async issueOtp(user: User) {
+    // There is no delivery provider in this repo yet. Do not pretend an OTP was
+    // delivered, log it in production, or allow the public development bypass.
+    if (env.NODE_ENV === 'production') throw new AppError(503, 'OTP delivery is not configured. Contact the administrator.');
     const otp =
       env.STATIC_OTP.length > 0
         ? env.STATIC_OTP
-        : env.NODE_ENV === 'production'
-          ? randomDigits(6)
-          : TESTING_OTP;
+        : TESTING_OTP;
     const otpHash = await bcrypt.hash(otp, 10);
     const otpExpiry = new Date(Date.now() + OTP_TTL_MS);
-    await this.userRepo.update(user.userId, { otpHash, otpExpiry });
-    console.log(`[AUTH] OTP for ${user.email ?? user.mobile}: ${otp}`);
+    await this.userRepo.updateOnly(user.userId, { otpHash, otpExpiry });
+
   }
 
   async register(input: RegisterInput) {
+    if (env.NODE_ENV === 'production') throw new AppError(503, 'OTP delivery is not configured. Contact the administrator.');
     const role =
       input.role === 'recruiter' ? UserRole.RECRUITER : UserRole.CANDIDATE;
 
@@ -137,13 +141,14 @@ export class AuthService {
   }
 
   async verifyOtp(input: VerifyOtpInput) {
+    if (env.NODE_ENV === 'production') throw new AppError(503, 'OTP delivery is not configured. Contact the administrator.');
     const user = await this.findByIdentifier(input.identifier);
     if (!user || user.isDeleted || !user.otpHash || !user.otpExpiry) {
       throw new AppError(400, 'Invalid or expired OTP');
     }
 
     if (user.otpExpiry.getTime() < Date.now()) {
-      await this.userRepo.update(user.userId, { otpHash: null, otpExpiry: null });
+      await this.userRepo.updateOnly(user.userId, { otpHash: null, otpExpiry: null });
       throw new AppError(400, 'Invalid or expired OTP');
     }
 
@@ -152,7 +157,10 @@ export class AuthService {
       throw new AppError(400, 'Invalid or expired OTP');
     }
 
-    await this.userRepo.update(user.userId, { otpHash: null, otpExpiry: null });
+    const consumed = await AppDataSource.getRepository(User).createQueryBuilder().update(User)
+      .set({ otpHash: null, otpExpiry: null })
+      .where('"userId" = :id AND "otpHash" = :hash AND "otpExpiry" > NOW()', { id: user.userId, hash: user.otpHash }).execute();
+    if (!consumed.affected) throw new AppError(400, 'Invalid or expired OTP');
     return user;
   }
 
@@ -161,22 +169,8 @@ export class AuthService {
     if (!user || user.isDeleted) {
       throw new AppError(404, 'User not found');
     }
-    const { parsedProfile, ...rest } = input;
-    const fields: UpdateUserInput = { ...rest };
-    /* Clients send parsedProfile as serialized JSON text; the column is jsonb
-       so store the parsed object instead. */
-    if (typeof parsedProfile === 'string') {
-      try {
-        fields.parsedProfile = JSON.parse(parsedProfile) as Record<string, unknown>;
-      } catch {
-        fields.parsedProfile = { text: parsedProfile };
-      }
-    } else if (parsedProfile) {
-      fields.parsedProfile = parsedProfile;
-    } else if (parsedProfile === null) {
-      fields.parsedProfile = null;
-    }
-    return this.userRepo.update(userId, { ...fields });
+    // Zod already validated the request. Store JSON as JSON, not serialized text.
+    return this.userRepo.update(userId, input);
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
@@ -189,8 +183,10 @@ export class AuthService {
       throw new AppError(400, 'Current password is incorrect');
     }
     const hashed = await bcrypt.hash(newPassword, 10);
-    await this.userRepo.update(userId, { password: hashed });
-    return true;
+    await AppDataSource.getRepository(User).createQueryBuilder().update(User)
+      .set({ password: hashed, sessionVersion: () => '"sessionVersion" + 1' })
+      .where('"userId" = :userId', { userId }).execute();
+    return this.userRepo.findById(userId);
   }
 
   async uploadResume(

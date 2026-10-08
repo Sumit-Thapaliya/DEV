@@ -1,3 +1,4 @@
+import { env } from '../config/env.js';
 import * as bcrypt from 'bcrypt';
 import { AppDataSource } from './data-source.js';
 import { User, UserRole } from '../modules/user/user.entity.js';
@@ -41,6 +42,7 @@ const ACCOUNTS = [
 ];
 
 export async function seedTestAccounts(): Promise<void> {
+  if (env.NODE_ENV === 'production') return;
   const repository = AppDataSource.getRepository(User);
   if ((await repository.count()) > 0) return;
 

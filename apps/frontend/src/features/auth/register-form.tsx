@@ -1,16 +1,17 @@
 'use client';
+import { useMutation } from '@tanstack/react-query';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { toast } from '@/components/ui/use-toast';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { readApiError, registerRequest } from '@/features/auth/api';
+import { registerRequest } from '@/features/auth/api';
 import { OtpStep } from '@/features/auth/otp-step';
 import { PasswordInput } from '@/features/auth/password-input';
-import { useAuthStore } from '@/store/auth';
+import { useSetSession } from '@/features/auth/queries';
 
 interface RegisterFormProps {
   role: 'candidate' | 'recruiter';
@@ -18,22 +19,32 @@ interface RegisterFormProps {
 
 export function RegisterForm({ role }: RegisterFormProps) {
   const router = useRouter();
-  const setSession = useAuthStore((state) => state.setSession);
+  const setSession = useSetSession();
   const [step, setStep] = useState<'details' | 'otp'>('details');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const mutation = useMutation({
+    mutationFn: (args: Parameters<typeof registerRequest>) =>
+      registerRequest(...args),
+  });
+  const submitting = mutation.isPending;
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     if (!identifier.trim()) {
-      toast({ title: 'Enter your email or phone number', variant: 'destructive' });
+      toast({
+        title: 'Enter your email or phone number',
+        variant: 'destructive',
+      });
       return;
     }
     if (password.length < 6) {
-      toast({ title: 'Password must be at least 6 characters', variant: 'destructive' });
+      toast({
+        title: 'Password must be at least 6 characters',
+        variant: 'destructive',
+      });
       return;
     }
     if (password !== confirmPassword) {
@@ -41,25 +52,23 @@ export function RegisterForm({ role }: RegisterFormProps) {
       return;
     }
 
-    setSubmitting(true);
     try {
-      const res = await registerRequest({
-        identifier: identifier.trim(),
-        password,
-        role,
+      await mutation.mutateAsync([
+        {
+          identifier: identifier.trim(),
+          password,
+          role,
+        },
+      ]);
+
+      toast({
+        title: 'Account created. Now verify the OTP.',
+        variant: 'success',
       });
-
-      if (!res.ok) {
-        toast({ title: await readApiError(res), variant: 'destructive' });
-        return;
-      }
-
-      toast({ title: 'Account created. Now verify the OTP.', variant: 'success' });
+      router.prefetch('/dashboard');
       setStep('otp');
-    } catch {
-      toast({ title: 'Network error. Please try again.', variant: 'destructive' });
-    } finally {
-      setSubmitting(false);
+    } catch (error) {
+      toast({ title: (error as Error).message, variant: 'destructive' });
     }
   };
 
@@ -70,8 +79,8 @@ export function RegisterForm({ role }: RegisterFormProps) {
         notice="Account created for"
         backLabel="Back to details"
         onBack={() => setStep('details')}
-        onVerified={(user, token) => {
-          setSession(user, token);
+        onVerified={(user) => {
+          setSession(user);
           toast({ title: 'Verified. Welcome to JobDev!', variant: 'success' });
           router.push('/dashboard');
         }}

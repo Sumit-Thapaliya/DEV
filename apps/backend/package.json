@@ -11,9 +11,11 @@
     "lint": "eslint src",
     "test": "vitest run",
     "bootstrap:superadmin": "tsx scripts/bootstrap-superadmin.ts",
-    "seed:test-accounts": "tsx scripts/seed-test-accounts.ts"
+    "seed:test-accounts": "tsx scripts/seed-test-accounts.ts",
+    "perf:db": "tsx scripts/measure-db.ts"
   },
   "dependencies": {
+    "axios": "^1.13.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

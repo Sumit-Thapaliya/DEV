@@ -1,18 +1,19 @@
 'use client';
+import { useMutation } from '@tanstack/react-query';
 
-import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, KeyRound } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { ArrowLeft, KeyRound } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { readApiError, verifyOtpRequest, type AuthUser } from '@/features/auth/api';
+import { verifyOtpRequest, type AuthUser } from '@/features/auth/api';
 
 interface OtpStepProps {
   identifier: string;
   notice: string;
-  onVerified: (user: AuthUser, token: string) => void;
+  onVerified: (user: AuthUser) => void;
   onBack: () => void;
   backLabel: string;
 }
@@ -25,7 +26,11 @@ export function OtpStep({
   backLabel,
 }: OtpStepProps) {
   const [otp, setOtp] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const mutation = useMutation({
+    mutationFn: (args: Parameters<typeof verifyOtpRequest>) =>
+      verifyOtpRequest(...args),
+  });
+  const submitting = mutation.isPending;
   const otpInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -40,21 +45,12 @@ export function OtpStep({
       return;
     }
 
-    setSubmitting(true);
     try {
-      const res = await verifyOtpRequest(identifier, otp);
+      const data = await mutation.mutateAsync([identifier, otp]);
 
-      if (!res.ok) {
-        toast({ title: await readApiError(res), variant: 'destructive' });
-        return;
-      }
-
-      const body = await res.json();
-      onVerified(body.data.user as AuthUser, body.data.token as string);
-    } catch {
-      toast({ title: 'Network error. Please try again.', variant: 'destructive' });
-    } finally {
-      setSubmitting(false);
+      onVerified(data.user as AuthUser);
+    } catch (error) {
+      toast({ title: (error as Error).message, variant: 'destructive' });
     }
   };
 
@@ -63,8 +59,13 @@ export function OtpStep({
       <div className="flex items-center gap-2 rounded-lg border border-border bg-primary-light px-3 py-2.5 text-sm text-primary-dark">
         <KeyRound className="h-4 w-4 shrink-0" />
         <span>
-          {notice} <strong>{identifier}</strong>. For testing, use{' '}
-          <strong>123456</strong>.
+          {notice} <strong>{identifier}</strong>.
+          {process.env.NODE_ENV !== 'production' && (
+            <>
+              {' '}
+              For testing, use <strong>123456</strong>.
+            </>
+          )}
         </span>
       </div>
 
@@ -77,7 +78,7 @@ export function OtpStep({
           maxLength={6}
           value={otp}
           onChange={(event) => setOtp(event.target.value.replace(/\D/g, ''))}
-          placeholder="123456"
+          placeholder="Enter 6-digit code"
           className="text-center text-lg tracking-[0.5em]"
           autoComplete="one-time-code"
         />

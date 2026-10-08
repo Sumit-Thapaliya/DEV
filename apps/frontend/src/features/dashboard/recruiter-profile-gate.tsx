@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
 import { Building2, X } from 'lucide-react';
+import { useState } from 'react';
 
 import { recruiterProfileIncomplete } from '@/features/auth/api';
+import { useSession, useSetSession } from '@/features/auth/queries';
 import { RecruiterProfileForm } from '@/features/dashboard/recruiter-profile-form';
-import { useAuthStore } from '@/store/auth';
 
 /**
  * Blocking modal: a recruiter cannot use any other page until the company
@@ -13,8 +13,8 @@ import { useAuthStore } from '@/store/auth';
  * dashboard stays visible but blurred behind the modal.
  */
 export function RecruiterProfileGate() {
-  const user = useAuthStore((state) => state.user);
-  const setUser = useAuthStore((state) => state.setUser);
+  const { data: user } = useSession();
+  const setUser = useSetSession();
   const [dismissed, setDismissed] = useState(false);
 
   if (!user || dismissed || !recruiterProfileIncomplete(user)) {

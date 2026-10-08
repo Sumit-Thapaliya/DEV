@@ -1,3 +1,4 @@
+import { serviceHttp } from '../../src/common/http.js';
 /** Opt-in DB integration check: creates temporary users and removes them in finally.
  * Run from apps/backend: pnpm exec tsx tests/resume/smoke-current-resume.ts
  * ATS extraction is mocked; the database, auth, HTTP, PDF and image storage are real.
@@ -20,22 +21,23 @@ async function main() {
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const nativeFetch = globalThis.fetch;
+  const oldAdapter = serviceHttp.defaults.adapter;
   let atsFails = false;
   const oldKey = env.ATS_API_KEY;
   env.ATS_API_KEY = 'integration-test-only';
-  globalThis.fetch = async (url, init) => {
-    if (String(url) === `${env.ATS_ENDPOINT}/v1/format`) {
-      if (atsFails) return new Response('temporarily unavailable', { status: 503 });
-      return Response.json({ raw_resume_data: { basics: { name: 'Temporary Save Test', summary: 'Edited summary' }, skills: [{ keywords: ['TypeScript', 'PostgreSQL'] }], education: [{ institution: 'Test University', area: 'Computer Science' }] } });
-    }
-    return nativeFetch(url, init);
-  };
+  serviceHttp.defaults.adapter = async config => ({
+    config, status: atsFails ? 503 : 200, statusText: atsFails ? 'Unavailable' : 'OK',
+    headers: { 'content-type': 'application/json' },
+    data: Buffer.from(JSON.stringify(atsFails ? { message: 'unavailable' } : { raw_resume_data: { basics: { name: 'Temporary Save Test', summary: 'Edited summary' }, skills: [{ keywords: ['TypeScript', 'PostgreSQL'] }], education: [{ institution: 'Test University', area: 'Computer Science' }] } })),
+  });
   try {
     const candidate = await repo.save(repo.create({ userId: candidateId, mobile: `test-${candidateId}`, email: null, password: 'not-a-login-hash', role: UserRole.CANDIDATE, resumeFileName: 'old.pdf', resumeData: Buffer.from('%PDF-old').toString('base64') }));
     const recruiter = await repo.save(repo.create({ userId: recruiterId, mobile: `test-${recruiterId}`, email: null, password: 'not-a-login-hash', role: UserRole.RECRUITER }));
     const token = signSession(candidate); const recruiterToken = signSession(recruiter);
-    const request = (path: string, method = 'GET', body?: unknown, bearer = token) => fetch(base + path, { method, headers: { ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const csrfResponse = await fetch(base + '/api/auth/csrf');
+    const csrf = (await csrfResponse.json()).data.csrfToken;
+    const csrfCookie = csrfResponse.headers.getSetCookie()[0].split(';')[0];
+    const request = (path: string, method = 'GET', body?: unknown, session = token) => fetch(base + path, { method, headers: { Cookie: `${csrfCookie}${session ? '; jobdev_token=' + session : ''}`, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     const pdf = await PDFDocument.create(); pdf.addPage().drawText('First edited resume');
     const firstPdf = Buffer.from(await pdf.save());
     const image = { src: 'data:image/jpeg;base64,/9j/2Q==', pxW: 1, pxH: 1 };
@@ -77,7 +79,7 @@ async function main() {
     assert.equal(replaced.resumeCanvas,null); assert.equal(replaced.resumePdf,null);
     console.log('PASS: authenticated replacement, bytea images, restore, latest PDF, recruiter watermark, failed-save preservation, old-version cleanup, ATS warning and upload replacement.');
   } finally {
-    globalThis.fetch = nativeFetch; env.ATS_API_KEY = oldKey;
+    serviceHttp.defaults.adapter = oldAdapter; env.ATS_API_KEY = oldKey;
     await AppDataSource.getRepository(ResumeVersion).delete({userId:candidateId});
     await repo.delete([candidateId,recruiterId]);
     await new Promise<void>(resolve => server.close(()=>resolve()));

@@ -1,30 +1,39 @@
 'use client';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { SavedResume } from './candidate/saved-resume';
 import { parseStoredProfile, profileChecklist } from './candidate/profile-data';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bookmark,
   Briefcase,
-  CalendarCheck,
   CheckCheck,
   Compass,
   Download,
   Eye,
   FileCheck2,
   Search,
-  Sparkles,
   UploadCloud,
   X,
 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { apiGet, apiPost, type JobRow } from '@/features/dashboard/shared';
+import {
+  logSearchKeywordRequest,
+  updateProfileRequest,
+} from '@/features/auth/api';
+import { useAccountQuery, useSession, useSetSession } from '@/features/auth/queries';
 import { CandidateProfileGate } from '@/features/dashboard/candidate-profile-gate';
+import { apiGet, apiPost, type JobRow } from '@/features/dashboard/shared';
 import { useCountUp } from '@/lib/use-count-up';
 import { cn } from '@/lib/utils';
-import { logSearchKeywordRequest, updateProfileRequest } from '@/features/auth/api';
-import { useAuthStore } from '@/store/auth';
 
+import dynamic from 'next/dynamic';
+import {
+  type AtsGenerationResult,
+  type AtsUploadedFile,
+  triggerDownload,
+} from './candidate/ats-service';
 import {
   ACTIVE_STATUSES,
   type Application,
@@ -37,18 +46,14 @@ import {
   INITIAL_PROFILE,
   INITIAL_SAVED_IDS,
   type JobPosting,
+  type Notification,
   PIPELINE_ORDER,
   profileCompleteness,
-  type Notification,
 } from './candidate/mock-data';
-import { Sidebar as CandidateSidebar, type CandidateView } from './candidate/sidebar';
-import { ResumeStudioView } from './candidate/resume-studio';
 import {
-  type AtsGenerationResult,
-  type AtsUploadedFile,
-  triggerDownload,
-} from './candidate/ats-service';
-import { ApplicationsTrend } from './candidate/charts';
+  Sidebar as CandidateSidebar,
+  type CandidateView,
+} from './candidate/sidebar';
 import {
   ApplicationDrawer,
   ApplicationsView,
@@ -61,9 +66,8 @@ import {
   SavedJobsView,
   SectionCard,
   SettingsView,
-  StagePills,
-  StatusChip,
 } from './candidate/views';
+const ResumeStudioView = dynamic(() => import('./candidate/resume-studio').then(module => module.ResumeStudioView), { loading: () => <p role="status">Opening resume studio…</p> });
 
 /* Accepts either our own Save format (CandidateProfile-shaped) or the raw JSON
    the ATS extraction service returns (an envelope around JSON-Resume data),
@@ -122,6 +126,8 @@ function mapLiveJob(job: JobRow): JobPosting {
     missingSkills: [],
     reasons: [],
     description: job.description ?? '',
+    minimumQualifications: str(metadata.minimumQualifications) ?? '',
+    preferredQualifications: str(metadata.preferredQualifications) ?? '',
     requirements: [],
   };
 }
@@ -240,80 +246,37 @@ function countByStatus(applications: Application[]): Record<ApplicationStatus, n
 }
 
 export function CandidateDashboard() {
-  const user = useAuthStore((state) => state.user);
-  const setUser = useAuthStore((state) => state.setUser);
-  const logout = useAuthStore((state) => state.logout);
+  const { data: user } = useSession();
+  const setUser = useSetSession();
 
   const [view, setView] = useState<CandidateView>('overview');
-  const [jobs, setJobs] = useState<JobPosting[]>(INITIAL_JOBS);
-  const [applications, setApplications] = useState<Application[]>(INITIAL_APPLICATIONS);
   const [savedIds, setSavedIds] = useState<string[]>(INITIAL_SAVED_IDS);
 
   const [toast, setToast] = useState<string | null>(null);
 
-  /* Profile mirrors the real account, enriched by the ATS-parsed resume when
-     one was uploaded; editable during the session. */
-  const [profile, setProfile] = useState<CandidateProfile>(() => {
+  const client = useQueryClient();
+  const jobsKey = ['account', user?.id, 'jobs'];
+  const applicationsKey = ['account', user?.id, 'applications'];
+  const profileViewsQuery = useAccountQuery<{ totalViews: number }>('/api/candidates/views/me');
+  const jobsQuery = useQuery({ queryKey: jobsKey, enabled: !!user,
+    queryFn: async ({ signal }) => (await apiGet<{ jobs: JobRow[] }>('/api/jobs', signal)).jobs.map(mapLiveJob) });
+  const applicationsQuery = useQuery({ queryKey: applicationsKey, enabled: !!user,
+    queryFn: async ({ signal }) => (await apiGet<{ applications: Array<{ id: string; status: string; createdAt: string; job: JobRow | null }> }>('/api/applications', signal)).applications.map(mapLiveApplication) });
+  const jobs = useMemo(() => (jobsQuery.data ?? INITIAL_JOBS).map(job => ({ ...job, saved: savedIds.includes(job.id) })), [jobsQuery.data, savedIds]);
+  const applications = applicationsQuery.data ?? INITIAL_APPLICATIONS;
+  const setApplications = (update: (current: Application[]) => Application[]) => client.setQueryData(applicationsKey, update(applications));
+  const profile = useMemo<CandidateProfile>(() => {
     const stored = parseStoredProfile(user?.parsedProfile);
-    return {
-      ...INITIAL_PROFILE,
-      ...stored,
-      name: user?.name || stored.name || '',
-      email: user?.email ?? '',
-      phone: user?.phone ?? '',
-      resumeFileName: user?.resumeFileName ?? '',
-    };
-  });
-
-  useEffect(() => {
-    setProfile((current) => {
-      const stored = parseStoredProfile(user?.parsedProfile);
-      return {
-        ...current,
-        ...stored,
-        name: user?.name || stored.name || current.name,
-        email: user?.email ?? current.email,
-        phone: user?.phone ?? current.phone,
-        resumeFileName: user?.resumeFileName ?? current.resumeFileName,
-      };
-    });
+    return { ...INITIAL_PROFILE, ...stored, name: user?.name || stored.name || '',
+      email: user?.email ?? '', phone: user?.phone ?? '', resumeFileName: user?.resumeFileName ?? '' };
   }, [user]);
-
   const checklist = useMemo(() => profileChecklist(profile), [profile]);
-
-  /* Live data: jobs and applications come from the API, not mock data. */
-  const loadLiveData = useCallback(async () => {
-    try {
-      const [jobsData, applicationsData] = await Promise.all([
-        apiGet<{ jobs: JobRow[] }>('/api/jobs'),
-        apiGet<{
-          applications: Array<{
-            id: string;
-            status: string;
-            createdAt: string;
-            job: JobRow | null;
-          }>;
-        }>('/api/applications'),
-      ]);
-      setJobs(jobsData.jobs.map(mapLiveJob));
-      setApplications(applicationsData.applications.map(mapLiveApplication));
-    } catch {
-      /* API errors surface via apiClient; dashboard shows empty states. */
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadLiveData();
-  }, [loadLiveData]);
-
-  /* Build-resume Save: update session state AND persist the edited profile so
-     it survives reloads (stored as parsedProfile on the account). */
+  const profileMutation = useMutation({ mutationFn: updateProfileRequest, onSuccess: data => setUser(data.user) });
+  const applyMutation = useMutation({ mutationFn: (jobId: string) => apiPost('/api/applications', { jobId }),
+    onSuccess: () => client.invalidateQueries({ queryKey: applicationsKey }) });
+  const searchMutation = useMutation({ mutationFn: logSearchKeywordRequest });
   async function persistProfile(next: CandidateProfile) {
-    const serialized = JSON.stringify(next);
-    await updateProfileRequest({ parsedProfile: serialized });
-    setProfile(next);
-    const currentUser = useAuthStore.getState().user;
-    if (currentUser) setUser({ ...currentUser, parsedProfile: serialized });
+    await profileMutation.mutateAsync({ parsedProfile: next as unknown as Record<string, unknown> });
   }
 
   /* ATS resume: the uploaded file and the generated download live here so they
@@ -321,28 +284,8 @@ export function CandidateDashboard() {
   const [atsFile, setAtsFile] = useState<AtsUploadedFile | null>(null);
   const [atsResult, setAtsResult] = useState<AtsGenerationResult | null>(null);
 
-  /* Notifications persist in localStorage so read state survives reloads. */
-  const [notifications, setNotifications] = useState<Notification[]>(() => {
-    if (typeof window === 'undefined') return INITIAL_NOTIFICATIONS;
-    try {
-      const raw = window.localStorage.getItem('jobdev-candidate-notifications');
-      if (raw) return JSON.parse(raw) as Notification[];
-    } catch {
-      /* fall back to the demo set */
-    }
-    return INITIAL_NOTIFICATIONS;
-  });
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        'jobdev-candidate-notifications',
-        JSON.stringify(notifications),
-      );
-    } catch {
-      /* storage may be unavailable; ignore */
-    }
-  }, [notifications]);
+  // Notification view state is memory-only, never persisted alongside identity data.
+  const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
 
   const [notifOpen, setNotifOpen] = useState(false);
   const [selectedApplication, setSelectedApplication] = useState<Application | null>(null);
@@ -396,7 +339,7 @@ export function CandidateDashboard() {
     const text = jobSearch.trim().toLowerCase();
     return jobs.filter((job) => {
       const haystack =
-        `${job.title} ${job.company} ${job.location} ${job.type} ${job.workMode} ${job.description}`.toLowerCase();
+        `${job.title} ${job.company} ${job.location} ${job.type} ${job.workMode} ${job.description} ${job.minimumQualifications ?? ''} ${job.preferredQualifications ?? ''}`.toLowerCase();
       const keywordMatch = keywordFilters.every((keyword) =>
         haystack.includes(keyword.toLowerCase()),
       );
@@ -447,10 +390,7 @@ export function CandidateDashboard() {
   const activeApplications = applications.filter((application) =>
     ACTIVE_STATUSES.includes(application.status),
   );
-  const avgMatch = Math.round(
-    applications.reduce((sum, application) => sum + application.match, 0) /
-      Math.max(applications.length, 1),
-  );
+
 
   const stats: Array<{
     label: string;
@@ -479,7 +419,7 @@ export function CandidateDashboard() {
     },
     {
       label: 'Profile views',
-      value: 0,
+      value: profileViewsQuery.data?.totalViews ?? 0,
       delta: `Profile ${completeness}% complete`,
       icon: Eye,
       hint: 'Open your profile',
@@ -490,7 +430,6 @@ export function CandidateDashboard() {
   /* Working global search: matches open roles + your applications, click to jump in. */
 
 
-  const unread = notifications.filter((notification) => !notification.read).length;
 
   /* ------------------------------- mutations ------------------------------ */
 
@@ -498,9 +437,6 @@ export function CandidateDashboard() {
     const saved = savedIds.includes(job.id);
     setSavedIds((current) =>
       saved ? current.filter((id) => id !== job.id) : [job.id, ...current],
-    );
-    setJobs((current) =>
-      current.map((entry) => (entry.id === job.id ? { ...entry, saved: !saved } : entry)),
     );
     setToast(
       saved
@@ -515,8 +451,7 @@ export function CandidateDashboard() {
       return;
     }
     try {
-      await apiPost('/api/applications', { jobId: job.id });
-      await loadLiveData();
+      await applyMutation.mutateAsync(job.id);
       setToast(`Applied to “${job.title}” — we will track it for you`);
     } catch (error) {
       setToast((error as Error).message);
@@ -547,18 +482,14 @@ export function CandidateDashboard() {
   }
 
 
-  function toggleChecklistItem() {
-    // Completion is computed from saved fields, never manually checked off.
-    setView('profile');
-  }
-
-  function downloadAtsResume() {
-    if (!atsResult) {
-      setView('resume');
-      return;
-    }
-    triggerDownload(atsResult.blob, atsResult.fileName);
-    setToast(`Downloading ${atsResult.fileName}`);
+  async function downloadAtsResume() {
+    try {
+      const saved = client.getQueryData<SavedResume | null>(['account', user?.id, 'resume']);
+      const result = atsResult ?? (saved ? (await import('./candidate/saved-resume')).restoreResult(saved) : null);
+      if (!result) { setView('resume'); return; }
+      triggerDownload(result.blob, result.fileName);
+      setToast(`Downloading ${result.fileName}`);
+    } catch (error) { setToast((error as Error).message); }
   }
 
   function openApplicationById(applicationId: string) {
@@ -594,13 +525,12 @@ export function CandidateDashboard() {
         }}
         strengthPercent={completeness}
         missingSignals={missingSignals}
-        onLogout={() => {
-          logout();
-          window.location.href = '/login';
-        }}
+        onLogout={() => window.dispatchEvent(new CustomEvent('jobdev:logout'))}
       />
 
       <main className="min-w-0 flex-1 space-y-4">
+        {(jobsQuery.isPending || applicationsQuery.isPending || profileViewsQuery.isPending) && <p role="status" className="text-sm text-muted-foreground">Loading dashboard data…</p>}
+        {(jobsQuery.error || applicationsQuery.error || profileViewsQuery.error) && <div role="alert" className="text-sm text-destructive">{(jobsQuery.error ?? applicationsQuery.error ?? profileViewsQuery.error)?.message} <button onClick={() => { void jobsQuery.refetch(); void applicationsQuery.refetch(); void profileViewsQuery.refetch(); }}>Retry</button></div>}
         {/* Greeting + global actions */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="animate-fade-in-up">
@@ -886,7 +816,7 @@ export function CandidateDashboard() {
                   event.preventDefault();
                   const applied = searchDraft.trim();
                   setJobSearch(applied);
-                  if (applied) logSearchKeywordRequest(applied).catch(() => {});
+                  if (applied) searchMutation.mutate(applied);
                 }}
               >
                 <div className="flex min-w-[200px] flex-1 flex-wrap items-center gap-2 rounded-lg border border-input bg-background px-2 py-1.5">
@@ -926,7 +856,7 @@ export function CandidateDashboard() {
                       type="button"
                       onClick={() => {
                         setKeywordFilters((current) => [...current, keyword]);
-                        logSearchKeywordRequest(keyword).catch(() => {});
+                        searchMutation.mutate(keyword);
                       }}
                       className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary-dark"
                     >
@@ -953,7 +883,6 @@ export function CandidateDashboard() {
             profile={profile}
             checklist={checklist}
             percent={completeness}
-            onToggleChecklist={toggleChecklistItem}
             onOpenSettings={() => setView('settings')}
             atsReady={Boolean(atsResult)}
             atsFileName={atsResult?.fileName ?? null}

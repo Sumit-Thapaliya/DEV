@@ -1,7 +1,9 @@
 'use client';
+import { fileAsBase64 } from '@/lib/files';
+import { useMutation } from '@tanstack/react-query';
 
-import { useRef, useState } from 'react';
 import { FileUp, UploadCloud, X } from 'lucide-react';
+import { useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,12 +11,10 @@ import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
 import {
   candidateProfileIncomplete,
-  readApiError,
   updateProfileRequest,
   uploadResumeRequest,
-  type AuthUser,
 } from '@/features/auth/api';
-import { useAuthStore } from '@/store/auth';
+import { useSession, useSetSession } from '@/features/auth/queries';
 
 const MAX_RESUME_BYTES = 2 * 1024 * 1024;
 const ACCEPTED = '.pdf,.doc,.docx';
@@ -25,14 +25,25 @@ const ACCEPTED = '.pdf,.doc,.docx';
  * matching the recruiter onboarding gate.
  */
 export function CandidateProfileGate() {
-  const user = useAuthStore((state) => state.user);
-  const setUser = useAuthStore((state) => state.setUser);
+  const { data: user } = useSession();
+  const setUser = useSetSession();
 
   const [name, setName] = useState(user?.name ?? '');
   const [file, setFile] = useState<File | null>(null);
-  const [saving, setSaving] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error('Please upload your resume');
+      const trimmed = name.trim();
+      if (trimmed.length >= 2 && trimmed !== user?.name) await updateProfileRequest({ name: trimmed });
+      return uploadResumeRequest(file.name, await fileAsBase64(file));
+    },
+    onSuccess: data => { setUser(data.user); toast({ title: data.atsError ? `Resume saved. ${data.atsError}` : 'Profile complete — welcome aboard!', variant: 'success' }); },
+    onError: error => toast({ title: error.message, variant: 'destructive' }),
+  });
+  const saving = save.isPending;
 
   if (!user || dismissed || !candidateProfileIncomplete(user)) {
     return null;
@@ -51,46 +62,9 @@ export function CandidateProfileGate() {
     setFile(picked);
   };
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!file) {
-      toast({ title: 'Please upload your resume', variant: 'destructive' });
-      return;
-    }
-    setSaving(true);
-    try {
-      const trimmed = name.trim();
-      if (trimmed && trimmed.length >= 2 && trimmed !== user.name) {
-        const nameRes = await updateProfileRequest({ name: trimmed });
-        if (!nameRes.ok) {
-          toast({ title: await readApiError(nameRes), variant: 'destructive' });
-          return;
-        }
-      }
-
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error('read failed'));
-        reader.readAsDataURL(file);
-      });
-      const base64 = dataUrl.split(',')[1] ?? '';
-
-      /* The backend forwards the file to the ATS extraction service and
-         stores the parsed profile on the account; nothing to do client-side. */
-      const res = await uploadResumeRequest(file.name, base64);
-      if (!res.ok) {
-        toast({ title: await readApiError(res), variant: 'destructive' });
-        return;
-      }
-      const body = (await res.json()) as { data: { user: AuthUser } };
-      setUser(body.data.user);
-      toast({ title: 'Profile complete — welcome aboard!', variant: 'success' });
-    } catch {
-      toast({ title: 'Network error. Please try again.', variant: 'destructive' });
-    } finally {
-      setSaving(false);
-    }
+    if (!save.isPending) save.mutate();
   };
 
   return (

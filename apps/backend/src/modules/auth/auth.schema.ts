@@ -18,7 +18,7 @@ export const loginSchema = z.object({
 
 export const verifyOtpSchema = z.object({
   identifier: identifierSchema,
-  otp: z.string().length(6, 'OTP must be 6 digits'),
+  otp: z.string().regex(/^\d{6}$/, 'OTP must be 6 digits'),
 });
 
 export const updateProfileSchema = z
@@ -35,13 +35,7 @@ export const updateProfileSchema = z
       .regex(/^[+]?[0-9\s()-]{7,15}$/, 'Enter a valid contact number')
       .optional(),
     avatar: z.string().max(400_000, 'Profile image is too large').optional(),
-    parsedProfile: z
-      .union([
-        z.string().max(500_000, 'Saved resume data is too large'),
-        z.record(z.string(), z.unknown()),
-      ])
-      .optional()
-      .nullable(),
+    parsedProfile: z.record(z.unknown()).nullish(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: 'Nothing to update',

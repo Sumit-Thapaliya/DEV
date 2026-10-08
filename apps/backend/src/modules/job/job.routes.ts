@@ -1,5 +1,10 @@
+import { validate } from '../../middlewares/validate.js';
+import { createJobSchema } from './job.schema.js';
 import { Router } from 'express';
-import { authMiddleware, requireRoles } from '../../middlewares/auth.middleware.js';
+import {
+  authMiddleware,
+  requireRoles,
+} from '../../middlewares/auth.middleware.js';
 import { UserRole } from '../user/user.entity.js';
 import {
   createJob,
@@ -18,6 +23,7 @@ jobRoutes.post(
   '/',
   authMiddleware,
   requireRoles(UserRole.RECRUITER, UserRole.ADMIN, UserRole.SUPERADMIN),
+  validate(createJobSchema),
   createJob,
 );
 jobRoutes.patch('/:id/status', authMiddleware, updateJobStatus);

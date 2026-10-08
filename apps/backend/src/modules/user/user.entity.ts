@@ -25,6 +25,9 @@ export class User {
   })
   role!: UserRole;
 
+  @Column({ type: 'int', default: 1 })
+  sessionVersion!: number;
+
   @Column({ type: 'varchar', unique: true, nullable: true })
   email!: string | null;
 

@@ -1,3 +1,4 @@
+import { csrfProtection, originAllowed } from './middlewares/csrf.middleware.js';
 import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
@@ -13,7 +14,9 @@ import { jobRoutes } from './modules/job/job.routes.js';
 export const app = express();
 
 app.use(helmet());
-app.use(cors());
+app.use(cors({ origin: (origin, callback) => callback(null, originAllowed(origin)), credentials: true }));
+app.use('/api', csrfProtection);
+app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'private, no-store'); next(); });
 app.use('/api/auth/resume/current', express.json({ limit: '25mb' }));
 app.use(express.json({ limit: '2mb' }));
 app.use(globalRateLimiter);

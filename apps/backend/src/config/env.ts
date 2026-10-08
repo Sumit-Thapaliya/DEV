@@ -6,6 +6,7 @@ const booleanFromEnv = z.enum(['true', 'false']).transform((value) => value === 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(4000),
+  WEB_ORIGINS: z.string().default('http://localhost:3000,http://127.0.0.1:3000'),
   DATABASE_URL: z.string().default('postgresql://jobdev:jobdev@localhost:5432/jobdev?schema=public'),
   DB_POOL_MIN: z.coerce.number().int().min(0).default(2),
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
@@ -23,3 +24,8 @@ const schema = z.object({
 });
 
 export const env = schema.parse(process.env);
+if (env.NODE_ENV === 'production') {
+  if (env.JWT_SECRET.length < 32 || env.JWT_SECRET === 'supersecretjwtkey') throw new Error('Production requires a strong JWT_SECRET of at least 32 characters.');
+  if (env.STATIC_OTP) throw new Error('STATIC_OTP is development-only. Configure real OTP delivery before production login.');
+  if (env.WEB_ORIGINS.split(',').some(origin => !origin.trim().startsWith('https://'))) throw new Error('Set WEB_ORIGINS to your exact HTTPS frontend origin(s) in production.');
+}

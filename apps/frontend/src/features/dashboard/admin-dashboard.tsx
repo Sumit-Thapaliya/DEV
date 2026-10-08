@@ -1,6 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { toast } from '@/components/ui/use-toast';
+import { useAccountQuery } from '@/features/auth/queries';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Briefcase,
   Building2,
@@ -8,14 +10,12 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react';
-import { toast } from '@/components/ui/use-toast';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import type { AuthUser } from '@/features/auth/api';
 import {
   apiDelete,
-  apiGet,
   EmptyState,
   formatDate,
   Section,
@@ -39,64 +39,43 @@ const ROLE_BADGES: Record<string, string> = {
 };
 
 export function AdminDashboard({ user }: { user: AuthUser }) {
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [users, setUsers] = useState<UserRow[]>([]);
-  const [jobs, setJobs] = useState<JobRow[]>([]);
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const [statsData, usersData, jobsData] = await Promise.all([
-        apiGet<{ stats: Stats }>('/api/admin/stats'),
-        apiGet<{ users: UserRow[] }>('/api/admin/users'),
-        apiGet<{ jobs: JobRow[] }>('/api/jobs'),
-      ]);
-      setStats(statsData.stats);
-      setUsers(usersData.users);
-      setJobs(jobsData.jobs);
-    } catch (error) {
-      toast({ title: (error as Error).message, variant: 'destructive' });
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const handleDeleteUser = async (target: UserRow) => {
-    setBusyId(target.id);
-    try {
-      await apiDelete(`/api/admin/users/${target.id}`);
-      toast({
-        title: `${target.name ?? target.identifier} deleted`,
-        variant: 'success',
-      });
-      await load();
-    } catch (error) {
-      toast({ title: (error as Error).message, variant: 'destructive' });
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const handleDeleteJob = async (job: JobRow) => {
-    setBusyId(job.id);
-    try {
-      await apiDelete(`/api/jobs/${job.id}`);
-      toast({ title: `"${job.title}" removed`, variant: 'success' });
-      await load();
-    } catch (error) {
-      toast({ title: (error as Error).message, variant: 'destructive' });
-    } finally {
-      setBusyId(null);
-    }
-  };
+  const client = useQueryClient();
+  const statsQuery = useAccountQuery<{ stats: Stats }>('/api/admin/stats');
+  const usersQuery = useAccountQuery<{ users: UserRow[] }>('/api/admin/users');
+  const jobsQuery = useAccountQuery<{ jobs: JobRow[] }>('/api/jobs');
+  const stats = statsQuery.data?.stats;
+  const users = usersQuery.data?.users ?? [];
+  const jobs = jobsQuery.data?.jobs ?? [];
+  const remove = useMutation({
+    mutationFn: (path: string) => apiDelete(path),
+    onSuccess: () => {
+      toast({ title: 'Removed', variant: 'success' });
+      void client.invalidateQueries({ queryKey: ['account', user.id] });
+    },
+    onError: (error) => toast({ title: error.message, variant: 'destructive' }),
+  });
+  const busyId = remove.isPending ? remove.variables?.split('/').pop() : null;
+  const handleDeleteUser = (target: UserRow) =>
+    remove.mutate(`/api/admin/users/${target.id}`);
+  const handleDeleteJob = (job: JobRow) => remove.mutate(`/api/jobs/${job.id}`);
 
   const deletable = (row: UserRow) =>
     row.id !== user.id && row.role !== 'admin' && row.role !== 'superadmin';
 
   return (
     <div className="space-y-8">
+      {(statsQuery.error || usersQuery.error || jobsQuery.error) && (
+        <p role="alert" className="text-destructive">
+          {(statsQuery.error ?? usersQuery.error ?? jobsQuery.error)?.message}{' '}
+          <button
+            onClick={() =>
+              client.invalidateQueries({ queryKey: ['account', user.id] })
+            }
+          >
+            Retry
+          </button>
+        </p>
+      )}
       <header>
         <h1 className="page-title">Admin console</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -105,10 +84,26 @@ export function AdminDashboard({ user }: { user: AuthUser }) {
       </header>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard icon={UserRound} label="Candidates" value={stats?.candidates ?? '…'} />
-        <StatCard icon={Briefcase} label="Recruiters" value={stats?.recruiters ?? '…'} />
-        <StatCard icon={ShieldCheck} label="Admins" value={stats?.admins ?? '…'} />
-        <StatCard icon={Building2} label="Open jobs" value={stats?.jobs ?? '…'} />
+        <StatCard
+          icon={UserRound}
+          label="Candidates"
+          value={stats?.candidates ?? '…'}
+        />
+        <StatCard
+          icon={Briefcase}
+          label="Recruiters"
+          value={stats?.recruiters ?? '…'}
+        />
+        <StatCard
+          icon={ShieldCheck}
+          label="Admins"
+          value={stats?.admins ?? '…'}
+        />
+        <StatCard
+          icon={Building2}
+          label="Open jobs"
+          value={stats?.jobs ?? '…'}
+        />
       </div>
 
       <Section title={`Users (${users.length})`}>

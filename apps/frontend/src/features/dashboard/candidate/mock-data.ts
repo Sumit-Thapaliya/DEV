@@ -219,6 +219,8 @@ export interface JobPosting {
   missingSkills: string[];
   reasons: string[];
   description: string;
+  minimumQualifications?: string;
+  preferredQualifications?: string;
   requirements: string[];
   saved?: boolean;
 }

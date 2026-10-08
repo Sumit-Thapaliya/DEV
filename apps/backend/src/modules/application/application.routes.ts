@@ -9,7 +9,7 @@ import { JobRepository } from '../job/job.repository.js';
 import { ApplicationRepository } from './application.repository.js';
 
 
-import { UserRepository } from '../user/user.repository.js';
+import { accountFields, UserRepository } from '../user/user.repository.js';
 import { AppDataSource } from '../../database/data-source.js';
 import { Application } from './application.entity.js';
 import { Job } from '../job/job.entity.js';
@@ -35,7 +35,7 @@ const listRecruiterApplicants: RequestHandler = async (req, res, next) => {
     }
     
     // 3. Get ALL candidates
-    const allCandidates = await userRepo.find({ where: { role: UserRole.CANDIDATE, isDeleted: false } });
+    const allCandidates = await userRepo.find({ select: accountFields, where: { role: UserRole.CANDIDATE, isDeleted: false } });
     
     const applicants = [];
     
@@ -148,19 +148,20 @@ const jobRepo = new JobRepository();
 
 const listMyApplications: RequestHandler = async (req, res, next) => {
   try {
-    const applications = await applicationRepo.findByCandidate(req.user!.userId);
-    const jobs = await Promise.all(
-      applications.map((application) => jobRepo.findById(application.jobId)),
-    );
+    const applications = await AppDataSource.getRepository(Application)
+      .createQueryBuilder('application')
+      .leftJoinAndMapOne('application.job', Job, 'job', 'job.id = application.jobId')
+      .where('application.candidateId = :id', { id: req.user!.userId })
+      .orderBy('application.createdAt', 'DESC').getMany() as Array<Application & { job: Job | null }>;
 
     res.json({
       success: true,
       data: {
-        applications: applications.map((application, index) => ({
+        applications: applications.map((application) => ({
           id: application.applicationId,
           status: application.status,
           createdAt: application.createdAt,
-          job: jobs[index] ?? null,
+          job: application.job ?? null,
         })),
       },
     });

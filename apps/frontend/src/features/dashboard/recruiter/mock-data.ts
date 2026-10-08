@@ -20,6 +20,8 @@ export interface Job {
   postedOn: string;
   statusChangedOn?: string;
   description?: string;
+  minimumQualifications?: string;
+  preferredQualifications?: string;
   requirements?: string[];
 }
 

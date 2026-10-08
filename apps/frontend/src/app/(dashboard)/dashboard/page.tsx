@@ -1,13 +1,38 @@
 'use client';
+import { useSession } from '@/features/auth/queries';
+import dynamic from 'next/dynamic';
 
-import { AdminDashboard } from '@/features/dashboard/admin-dashboard';
-import { CandidateDashboard } from '@/features/dashboard/candidate-dashboard';
-import { RecruiterDashboard } from '@/features/dashboard/recruiter-dashboard';
-import { SuperAdminDashboard } from '@/features/dashboard/super-admin-dashboard';
-import { useAuthStore } from '@/store/auth';
+const AdminDashboard = dynamic(
+  () =>
+    import('@/features/dashboard/admin-dashboard').then(
+      (module) => module.AdminDashboard,
+    ),
+  { loading: () => <p role="status">Opening dashboard…</p> },
+);
+const CandidateDashboard = dynamic(
+  () =>
+    import('@/features/dashboard/candidate-dashboard').then(
+      (module) => module.CandidateDashboard,
+    ),
+  { loading: () => <p role="status">Opening dashboard…</p> },
+);
+const RecruiterDashboard = dynamic(
+  () =>
+    import('@/features/dashboard/recruiter-dashboard').then(
+      (module) => module.RecruiterDashboard,
+    ),
+  { loading: () => <p role="status">Opening dashboard…</p> },
+);
+const SuperAdminDashboard = dynamic(
+  () =>
+    import('@/features/dashboard/super-admin-dashboard').then(
+      (module) => module.SuperAdminDashboard,
+    ),
+  { loading: () => <p role="status">Opening dashboard…</p> },
+);
 
 export default function DashboardPage() {
-  const user = useAuthStore((state) => state.user);
+  const { data: user } = useSession();
 
   if (!user) {
     return null;

@@ -1,18 +1,15 @@
 'use client';
+import { useMutation } from '@tanstack/react-query';
 
-import { useRef, useState } from 'react';
-import { BadgeCheck, ImagePlus } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { BadgeCheck, ImagePlus } from 'lucide-react';
+import { useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  readApiError,
-  updateProfileRequest,
-  type AuthUser,
-} from '@/features/auth/api';
+import { updateProfileRequest, type AuthUser } from '@/features/auth/api';
 
 const MAX_IMAGE_BYTES = 300 * 1024;
 
@@ -26,7 +23,8 @@ export function RecruiterProfileForm({ user, onSaved }: RecruiterProfileFormProp
   const [aboutCompany, setAboutCompany] = useState(user.aboutCompany ?? '');
   const [contactNumber, setContactNumber] = useState(user.contactNumber ?? '');
   const [avatar, setAvatar] = useState<string | null>(user.avatar);
-  const [saving, setSaving] = useState(false);
+  const mutation = useMutation({ mutationFn: updateProfileRequest });
+  const saving = mutation.isPending;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleImage = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -64,27 +62,18 @@ export function RecruiterProfileForm({ user, onSaved }: RecruiterProfileFormProp
       return;
     }
 
-    setSaving(true);
     try {
-      const res = await updateProfileRequest({
+      const data = await mutation.mutateAsync({
         companyName: companyName.trim(),
         aboutCompany: aboutCompany.trim() || null,
         contactNumber: contactNumber.trim(),
         avatar,
       });
 
-      if (!res.ok) {
-        toast({ title: await readApiError(res), variant: 'destructive' });
-        return;
-      }
-
-      const body = await res.json();
       toast({ title: 'Profile saved', variant: 'success' });
-      onSaved(body.data.user as AuthUser);
-    } catch {
-      toast({ title: 'Network error. Please try again.', variant: 'destructive' });
-    } finally {
-      setSaving(false);
+      onSaved(data.user);
+    } catch (error) {
+      toast({ title: (error as Error).message, variant: 'destructive' });
     }
   };
 

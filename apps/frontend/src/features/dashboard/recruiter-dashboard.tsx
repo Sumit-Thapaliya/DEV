@@ -1,28 +1,24 @@
 'use client';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Bell,
-  Briefcase,
-  CalendarCheck,
-  CheckCheck,
-  Eye,
-  Plus,
-  Search,
-  Users,
-} from 'lucide-react';
+import { Briefcase, CheckCheck, Eye, Plus, Users } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/use-toast';
-import { apiGet, apiPatch, apiPost, type JobRow } from '@/features/dashboard/shared';
+import { useSession } from '@/features/auth/queries';
+import {
+  apiGet,
+  apiPatch,
+  apiPost,
+  type JobRow,
+} from '@/features/dashboard/shared';
 import { useCountUp } from '@/lib/use-count-up';
 import { cn } from '@/lib/utils';
-import { useAuthStore } from '@/store/auth';
 
+import { ViewedCandidatesView, ViewedCandidateDrawer, useRecordProfileView } from './recruiter/viewed-candidates';
 import { ApplicationsChart } from './recruiter/charts';
 import {
-  INITIAL_APPLICANTS,
   INITIAL_JOBS,
   INITIAL_NOTIFICATIONS,
   type Applicant,
@@ -63,6 +59,9 @@ function mapApiJob(row: JobRow): Job {
     department: str(metadata.department) ?? '',
     location: row.location ?? 'Remote',
     type,
+    description: row.description ?? '',
+    minimumQualifications: str(metadata.minimumQualifications) ?? '',
+    preferredQualifications: str(metadata.preferredQualifications) ?? '',
     salary: str(metadata.salary) ?? 'Negotiable',
     status: row.status === 'paused' ? 'Paused' : row.status === 'closed' ? 'Closed' : 'Active',
     applicants: 0,
@@ -140,49 +139,25 @@ function StatCard({
 }
 
 export function RecruiterDashboard() {
-  const user = useAuthStore((state) => state.user);
-  const logout = useAuthStore((state) => state.logout);
+  const { data: user } = useSession();
 
   const [view, setView] = useState<RecruiterView>('overview');
-  const [jobs, setJobs] = useState<Job[]>(INITIAL_JOBS);
-  const [applicants, setApplicants] = useState<Applicant[]>([]);
+  const client = useQueryClient();
+  const jobsKey = ['account', user?.id, 'recruiter-jobs'];
+  const applicantsKey = ['account', user?.id, 'applicants'];
+  const jobsQuery = useQuery({ queryKey: jobsKey, enabled: !!user,
+    queryFn: async ({ signal }) => (await apiGet<{ jobs: JobRow[] }>('/api/jobs/mine', signal)).jobs.map(mapApiJob) });
+  const applicantsQuery = useQuery({ queryKey: applicantsKey, enabled: !!user,
+    queryFn: async ({ signal }) => (await apiGet<{ applicants: Applicant[] }>('/api/applications/recruiter', signal)).applicants });
+  const jobs = jobsQuery.data ?? INITIAL_JOBS;
+  const applicants = applicantsQuery.data ?? [];
+  const setJobs = (update: (current: Job[]) => Job[]) => client.setQueryData(jobsKey, update(jobs));
+  const setApplicants = (update: (current: Applicant[]) => Applicant[]) => client.setQueryData(applicantsKey, update(applicants));
+  const createJob = useMutation({ mutationFn: (data: Record<string, unknown>) => apiPost<{ job: JobRow }>('/api/jobs', data) });
+  const updateJob = useMutation({ mutationFn: ({ id, status }: { id: string; status: string }) => apiPatch(`/api/jobs/${id}/status`, { status }) });
+  // Notification view state is memory-only, never persisted alongside identity data.
+  const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
 
-  /* Jobs are real rows: load what this recruiter has posted. */
-  useEffect(() => {
-    Promise.all([
-      apiGet<{ jobs: JobRow[] }>('/api/jobs/mine'),
-      apiGet<{ applicants: Applicant[] }>('/api/applications/recruiter')
-    ])
-      .then(([jobsData, applicantsData]) => {
-        setJobs(jobsData.jobs.map(mapApiJob));
-        setApplicants(applicantsData.applicants);
-      })
-      .catch((error: Error) =>
-        toast({ title: error.message, variant: 'destructive' }),
-      );
-  }, []);
-  /* Notifications persist in localStorage so read state survives reloads. */
-  const [notifications, setNotifications] = useState<Notification[]>(() => {
-    if (typeof window === 'undefined') return INITIAL_NOTIFICATIONS;
-    try {
-      const raw = window.localStorage.getItem('jobdev-recruiter-notifications');
-      if (raw) return JSON.parse(raw) as Notification[];
-    } catch {
-      /* fall back to the demo set */
-    }
-    return INITIAL_NOTIFICATIONS;
-  });
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        'jobdev-recruiter-notifications',
-        JSON.stringify(notifications),
-      );
-    } catch {
-      /* storage may be unavailable; ignore */
-    }
-  }, [notifications]);
   const [notifOpen, setNotifOpen] = useState(false);
 
   /* The navbar bell + gear live in the shared layout; they drive this
@@ -207,6 +182,16 @@ export function RecruiterDashboard() {
   const [postJobSignal, setPostJobSignal] = useState(0);
   const [selectedApplicant, setSelectedApplicant] =
     useState<Applicant | null>(null);
+  const recordView = useRecordProfileView();
+  const [viewedCandidateId, setViewedCandidateId] = useState<string | null>(null);
+  const openApplicant = (applicant: Applicant) => {
+    setSelectedApplicant(applicant);
+    if (applicant.candidateId) recordView.mutate(applicant.candidateId);
+  };
+  const openViewedCandidate = (candidateId: string) => {
+    setViewedCandidateId(candidateId);
+    recordView.mutate(candidateId);
+  };
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
 
   const firstName =
@@ -260,17 +245,18 @@ export function RecruiterDashboard() {
 
   /* Working global search: matches jobs + applicants, click to jump in. */
 
-  const unread = notifications.filter((n) => !n.read).length;
 
   async function addJob(job: Job) {
     try {
-      const data = await apiPost<{ job: JobRow }>('/api/jobs', {
+      const data = await createJob.mutateAsync({
         title: job.title,
         location: job.location,
         description: job.description ?? null,
         department: job.department || null,
         employmentType: job.type,
         salary: job.salary || null,
+        minimumQualifications: job.minimumQualifications || null,
+        preferredQualifications: job.preferredQualifications || null,
       });
       /* Saved job rows power the candidate side too - their keyword chips
          derive from these posts automatically. */
@@ -280,6 +266,7 @@ export function RecruiterDashboard() {
         title: error instanceof Error ? error.message : 'Could not post the job',
         variant: 'destructive',
       });
+      throw error;
     }
   }
 
@@ -287,7 +274,7 @@ export function RecruiterDashboard() {
     const apiStatus =
       status === 'Active' ? 'open' : status === 'Paused' ? 'paused' : 'closed';
     try {
-      await apiPatch(`/api/jobs/${id}/status`, { status: apiStatus });
+      await updateJob.mutateAsync({ id, status: apiStatus });
     } catch (error) {
       toast({
         title: error instanceof Error ? error.message : 'Could not update the job',
@@ -358,10 +345,12 @@ export function RecruiterDashboard() {
         active={view}
         onSelect={setView}
         badges={badges}
-        onLogout={logout}
+        onLogout={() => window.dispatchEvent(new CustomEvent('jobdev:logout'))}
       />
 
       <main className="min-w-0 flex-1 space-y-4">
+        {(jobsQuery.isPending || applicantsQuery.isPending) && <p role="status" className="text-sm text-muted-foreground">Loading recruiter data…</p>}
+        {(jobsQuery.error || applicantsQuery.error) && <div role="alert" className="text-sm text-destructive">{(jobsQuery.error ?? applicantsQuery.error)?.message} <button onClick={() => { void jobsQuery.refetch(); void applicantsQuery.refetch(); }}>Retry</button></div>}
         {/* Top bar */}
         {/* z-40 only while a dropdown is open so results float above cards;
             otherwise the bar stays low and scrolls under the sticky nav. */}
@@ -549,7 +538,7 @@ export function RecruiterDashboard() {
                     >
                       <button
                         type="button"
-                        onClick={() => setSelectedApplicant(applicant)}
+                        onClick={() => openApplicant(applicant)}
                         className="flex w-full items-center gap-3 rounded-lg p-1 text-left transition-colors hover:bg-primary-light"
                       >
                         <Avatar name={applicant.name} />
@@ -629,6 +618,7 @@ export function RecruiterDashboard() {
           <JobsView
             jobs={jobs}
             onAdd={addJob}
+            posting={createJob.isPending}
             onSetStatus={setJobStatus}
             onViewApplicants={viewApplicantsFor}
             onOpenJob={setSelectedJob}
@@ -636,13 +626,16 @@ export function RecruiterDashboard() {
           />
         )}
 
+        {view === 'harvested' && <ViewedCandidatesView onOpenProfile={openViewedCandidate} />}
+        {viewedCandidateId && <ViewedCandidateDrawer candidateId={viewedCandidateId} onClose={() => setViewedCandidateId(null)} />}
+
         {view === 'applicants' && (
           <ApplicantsView
             applicants={applicants}
             onSetStatus={setApplicantStatus}
             filterJob={jobFilter}
             onClearJobFilter={() => setJobFilter(null)}
-            onOpen={setSelectedApplicant}
+            onOpen={openApplicant}
             statusFilter={statusFilter}
             onStatusFilterChange={setStatusFilter}
             onScheduleInterview={scheduleInterview}

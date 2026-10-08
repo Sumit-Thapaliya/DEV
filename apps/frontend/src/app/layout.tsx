@@ -1,8 +1,9 @@
-import './globals.css';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import './globals.css';
 
 import { BuildGuard } from '@/components/build-guard';
+import { QueryProvider } from '@/components/query-provider';
 import { Toaster } from '@/components/ui/toaster';
 import { BUILD_ID } from '@/lib/build-id';
 
@@ -26,9 +27,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         className="min-h-screen bg-background text-foreground antialiased"
         suppressHydrationWarning
       >
-        {children}
-        <BuildGuard />
-        <Toaster />
+        <QueryProvider>
+          {children}
+          <BuildGuard />
+          <Toaster />
+        </QueryProvider>
       </body>
     </html>
   );
